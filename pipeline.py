@@ -11,6 +11,8 @@ from ists.spatial import prepare_exogenous_data, prepare_spatial_data
 from ists.model.wrapper import ModelWrapper
 from ists.metrics import compute_metrics
 
+import tensorflow as tf
+
 
 def parse_params():
     """ Parse input parameters. """
@@ -18,7 +20,15 @@ def parse_params():
     parser = argparse.ArgumentParser()
     parser.add_argument('-f', '--file', type=str, required=True,
                         help='the path where the configuration is stored.')
+    parser.add_argument('--device', type=str,
+                        default='cuda:0' if len(tf.config.list_physical_devices('GPU')) > 0 else 'cpu',
+                        help='device to use (cpu, cuda:0, cuda:1, ...)')
     args = parser.parse_args()
+
+    gpus = tf.config.list_physical_devices('GPU')
+    gpu_idx = int(args.device[-1])
+    tf.config.set_visible_devices(gpus[gpu_idx], 'GPU')
+
     conf_file = args.file
     assert os.path.exists(conf_file), 'Configuration file does not exist'
 
@@ -326,13 +336,12 @@ def main():
     # with open(f"output/{path_params['type']}.pickle", "rb") as f:
     #     train_test_dict = pickle.load(f)
 
-    _ = model_step(train_test_dict, model_params)
-
-    print('Hello World!')
+    return model_step(train_test_dict, model_params)
 
 
 def main2():
-    conf_file = 'data/params_ushcn.json'
+    path_params, prep_params, eval_params, model_params = parse_params()
+
     subsets = [
         'subset_agg_th1_0.csv',
         'subset_agg_th1_1.csv',
@@ -342,50 +351,25 @@ def main2():
         'subset_agg_th15_2.csv',
         'subset_agg_th15_3.csv'
     ]
-    with open(conf_file, 'r') as f:
-        conf = json.load(f)
 
     for nan_num in [0.0, 0.2, 0.5, 0.8]:
         for subset in subsets:
-            print(f"\n {subset}")
-            path_params, prep_params, eval_params, model_params = conf['path_params'], conf['prep_params'], conf['eval_params'], conf['model_params']
-            path_params["ex_filename"] = "../../data/USHCN/" + subset
+            dataset_name = (f"{path_params['type']}_"
+                            f"{subset.replace('subset_agg_', '').replace('.csv', '')}_"
+                            f"nan{int(nan_num * 10)}")
+
+            print(dataset_name)
+
+            path_params["ex_filename"] = "./data/USHCN/" + subset
             path_params["nan_percentage"] = nan_num
-            path_params = change_params(path_params, '../../data', '../../Dataset/AdbPo')
 
-            train_test_dict = data_step(path_params, prep_params, eval_params)
+            try:
+                train_test_dict = data_step(path_params, prep_params, eval_params)
+                print(model_step(train_test_dict, model_params))
 
-            with open(f"output/{path_params['type']}_{subset.replace('subset_agg_', '').replace('.csv', '')}_nan{int(nan_num * 10)}.pickle", "wb") as f:
-
-                # List of keys to remove
-                keys_to_remove = [
-                    'dist_x_train',
-                    'dist_x_test',
-
-                    'dist_y_train',
-                    'dist_y_test',
-
-                    'spt_train',
-                    'spt_test',
-
-                    'exg_train',
-                    'exg_test',
-                ]
-
-                # Remove keys
-                for key in keys_to_remove:
-                    train_test_dict.pop(key)
-
-                train_test_dict['params'] = {
-                    'path_params': path_params,
-                    'prep_params': prep_params,
-                    'eval_params': eval_params,
-                    'model_params': model_params,
-                }
-                pickle.dump(train_test_dict, f)
-
-    print('Hello World!')
+            except Exception as e:
+                print(f"Dataset {dataset_name} failed: {e}")
 
 
 if __name__ == '__main__':
-    main()
+    main2()
