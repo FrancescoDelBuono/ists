@@ -45,7 +45,7 @@ def load_frenchpiezo_data(
 
     # Create a copy of exogenous series from the raw time-series dict
     exg_dict = {
-        k: df[["tp", "e"]].fillna(method='ffill').dropna(axis=0, how='any')
+        k: df[["tp", "e"]].ffill().dropna(axis=0, how='any')
         for k, df in ts_dict.items()
     }
 

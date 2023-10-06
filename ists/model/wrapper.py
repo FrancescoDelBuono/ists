@@ -106,7 +106,7 @@ class FunctionCallback(tf.keras.callbacks.Callback):
 
     def on_epoch_end(self, epoch, logs=None):
         # Get predictions for the subset of data
-        y_pred_subset = self.model.predict([self.x] + [self.exg] + self.spt)
+        y_pred_subset = self.model.predict([self.x] + [self.exg] + self.spt, verbose=0)
 
         # Compute metrics on the subset on the transformed data domain
         metrics = compute_metrics(self.y, y_pred_subset)
@@ -173,7 +173,7 @@ class ModelWrapper(object):
             self.exg_transformer = get_transformer(transform_type)
 
         self.checkpoint_dir = os.path.join(output_dir, 'best_model')
-        self.checkpoint_path = os.path.join(output_dir, 'best_model', 'cp.ckpt')
+        self.checkpoint_path = os.path.join(output_dir, 'best_model', f'cp.ckpt')
 
         self.best_valid = best_valid
         self.loss = loss
@@ -185,13 +185,11 @@ class ModelWrapper(object):
         self.feature_mask = model_params['feature_mask']
         self.exg_feature_mask = model_params['exg_feature_mask']
 
-        # Check if model output dir exists
-        if not os.path.isdir(output_dir):
-            raise ValueError(f'Model output dir does not exist: {output_dir}')
+        # Create output directory if it does not exist
+        os.makedirs(output_dir, exist_ok=True)
 
-        # Create checkpoint directory
-        if not os.path.isdir(self.checkpoint_dir):
-            os.makedirs(self.checkpoint_dir, exist_ok=True)
+        # Create checkpoint directory if it does not exist
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
 
     def _fit_transform(self, x: np.ndarray, spt: List[np.ndarray], exg: np.ndarray):
         if self.transform_type:
@@ -244,7 +242,7 @@ class ModelWrapper(object):
 
     def _get_best_model(self):
         if self.best_valid and not os.path.isdir(self.checkpoint_dir):
-            raise ValueError('Impossible load saved model, it does not exist!')
+            raise ValueError('Impossible to load saved model, it does not exist!')
 
         if self.best_valid:
             # self.model = tf.keras.models.load_model(self.model_path)
@@ -289,7 +287,8 @@ class ModelWrapper(object):
             save_best_only=True,
             save_weights_only=True,
             mode='min',
-            verbose=1,
+            # verbose=1,
+            verbose=0
             # save_format='tf'
         )
         if self.lr > 0:
@@ -311,7 +310,8 @@ class ModelWrapper(object):
             epochs=epochs,
             batch_size=batch_size,
             validation_split=validation_split,
-            verbose=verbose,
+            # verbose=verbose,
+            verbose=0,
             callbacks=[test_callback, model_checkpoint]
         )
 
@@ -323,7 +323,7 @@ class ModelWrapper(object):
         spt = self._get_spatial_array(x, spt)
         x, spt, exg = self._fit_transform(x, spt, exg)
 
-        y_preds = self.model.predict([x] + [exg] + spt)
+        y_preds = self.model.predict([x] + [exg] + spt, verbose=0)
 
         y_preds = self._label_inverse_transform(y_preds)
 

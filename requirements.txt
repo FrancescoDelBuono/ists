@@ -1,6 +1,7 @@
 numpy
 pandas
-tensorflow
+tensorflow[and-cuda]
+tensorrt
 scikit-learn
 openpyxl
 pyproj

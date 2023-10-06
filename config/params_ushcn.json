@@ -1,8 +1,8 @@
 {
     "path_params": {
-        "ts_filename": "../../data/USHCN/pivot_1990_1993_thr4_normalize.csv",
+        "ts_filename": "./data/USHCN/pivot_1990_1993_thr4_normalize.csv",
         "ctx_filename": "",
-        "ex_filename": "../../data/USHCN/subset_agg_th1_1.csv",
+        "ex_filename": "./data/USHCN/subset_agg_th1_1.csv",
         "type": "ushcn",
         "nan_percentage": 0.2
     },
@@ -44,7 +44,7 @@
         "transform_type": null,
         "model_type": "sttransformer",
         "nn_params": {
-            "kernel_size": 3,
+            "kernel_size": 5,
             "d_model": 64,
             "num_heads": 4,
             "dff": 128,
@@ -57,7 +57,7 @@
             "with_cross": true,
             "dropout_rate": 0.1
         },
-        "lr": 0.00004,
+        "lr": 4e-5,
         "loss": "mse",
         "batch_size": 64,
         "epochs": 20

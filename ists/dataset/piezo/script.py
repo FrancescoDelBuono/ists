@@ -66,7 +66,8 @@ def combine_tp_files(tp1_filename: str, tp2_filename: str) -> Dict[Tuple[float, 
 
     # For each x and y crate time-series DataFrame
     tp_dict = {}
-    for i, y in tqdm(enumerate(y_list)):  # Iterate over latitude (y)
+    # for i, y in tqdm(enumerate(y_list)):  # Iterate over latitude (y)
+    for i, y in enumerate(y_list):  # Iterate over latitude (y)
         for j, x in enumerate(x_list):  # Iterate over longitude (x)
             # Read values with coords x, y from part 1 and 2
             vals1 = matrix1[:, i, j]
@@ -97,7 +98,8 @@ def unwrap_t2m_file(t2m_filename: str) -> Dict[Tuple[float, float], pd.DataFrame
 
     # For each x and y crate time-series DataFrame
     t2m_dict = {}
-    for i, y in tqdm(enumerate(y_list)):  # Iterate over latitude (y)
+    # for i, y in tqdm(enumerate(y_list)):  # Iterate over latitude (y)
+    for i, y in enumerate(y_list):  # Iterate over latitude (y)
         for j, x in enumerate(x_list):  # Iterate over longitude (x)
             # Read values with coords x, y
             vals = matrix[:, i, j]
@@ -173,7 +175,8 @@ def compress_exogenous_series():
     with open(filename, 'rb') as f:
         exg_dict = pickle.load(f)
 
-    for k, ts in tqdm(exg_dict.items()):
+    # for k, ts in tqdm(exg_dict.items()):
+    for k, ts in exg_dict.items():
         # Sampling based on freq
         ts = compress_ts(ts, method=my_stats, freq='W')
         exg_dict[k] = ts

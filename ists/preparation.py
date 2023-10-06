@@ -108,8 +108,8 @@ def find_nearest_label(ts_label: pd.Series) -> Tuple[np.ndarray, np.ndarray]:
     label_isnull = ts_label.isnull().values
     distance_fw = null_distance_array(label_isnull, method='lin', max_dist=None)
     distance_bw = null_distance_array(label_isnull[::-1], method='lin', max_dist=None)[::-1]
-    label_fw = ts_label.fillna(method='ffill').values
-    label_bw = ts_label.fillna(method='bfill').values
+    label_fw = ts_label.ffill().values
+    label_bw = ts_label.bfill().values
     min_distance = np.where(distance_fw < distance_bw, distance_fw, distance_bw)
     nearest_label = np.where(distance_fw < distance_bw, label_fw, label_bw)
 
@@ -234,7 +234,8 @@ def prepare_data(
     features.insert(0, label_col)
 
     # Iterate each time-series
-    for k, ts in tqdm(ts_dict.items()):
+    # for k, ts in tqdm(ts_dict.items()):
+    for k, ts in ts_dict.items():
         # Reorder time-series column in order to have the label at the start
         ts = ts[features].copy()
 
@@ -263,7 +264,7 @@ def prepare_data(
         # Forward fill null values
         ts_new['__LABEL__'] = ts_new[label_col]
         if with_fill:
-            ts_new[features + new_features] = ts_new[features + new_features].fillna(method='ffill')
+            ts_new[features + new_features] = ts_new[features + new_features].ffill()
         # Sliding window step
         blob = sliding_window(ts_new, '__LABEL__', features + new_features, num_past, num_fut)
         if blob is None:

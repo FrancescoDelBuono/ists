@@ -41,7 +41,8 @@ def prepare_spatial_data(
     arr_mapping = array_mapping(id_array, time_array, dist_x_array)
     # Keep only spatial id that can be used
     spt_dict = {k: s.index[(s.index.isin(id_array)) & (s <= max_dist_th)] for k, s in spt_dict.items()}
-    for rid, rtime in tqdm(zip(id_array, time_array)):
+    # for rid, rtime in tqdm(zip(id_array, time_array)):
+    for rid, rtime in zip(id_array, time_array):
         # Keep only spatial id that can be used
         spt_ids = spt_dict[rid]
         spt_count = 0
@@ -98,7 +99,8 @@ def prepare_exogenous_data(
         df = df[features + time_feats]
         exg_dict[k] = df
 
-    for rid, rtime in tqdm(zip(id_array, time_array)):
+    # for rid, rtime in tqdm(zip(id_array, time_array)):
+    for rid, rtime in zip(id_array, time_array):
         df: pd.DataFrame = exg_dict[rid]
         # df = time_encoding(df, codes=time_feats)
         # df = df[features + time_feats]

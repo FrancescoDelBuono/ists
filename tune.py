@@ -4,7 +4,7 @@ from datetime import datetime
 import pandas as pd
 from sklearn.model_selection import ParameterGrid
 
-from pipeline import data_step, model_step, get_params, parse_params
+from parallel_pipeline import data_step, model_step, get_params, parse_params
 
 
 def my_model_search(path_params, prep_params, eval_params, model_params):

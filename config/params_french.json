@@ -1,8 +1,8 @@
 {
     "path_params": {
-        "ts_filename": "../../data/FrenchPiezo/dataset_2015_2021.csv",
-        "ctx_filename": "../../data/FrenchPiezo/dataset_stations.csv",
-        "ex_filename": "../../data/FrenchPiezo/subset_agg_th15_1.csv",
+        "ts_filename": "./data/FrenchPiezo/dataset_2015_2021.csv",
+        "ctx_filename": "./data/FrenchPiezo/dataset_stations.csv",
+        "ex_filename": "./data/FrenchPiezo/subset_agg_th15_1.csv",
         "type": "french",
         "nan_percentage": 0.2
     },
@@ -44,7 +44,7 @@
         "transform_type": "standard",
         "model_type": "sttransformer",
         "nn_params": {
-            "kernel_size": 3,
+            "kernel_size": 5,
             "d_model": 64,
             "num_heads": 4,
             "dff": 128,
