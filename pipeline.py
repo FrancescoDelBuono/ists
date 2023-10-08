@@ -248,7 +248,7 @@ def data_step(path_params: dict, prep_params: dict, eval_params: dict) -> dict:
     return res
 
 
-def model_step(train_test_dict: dict, model_params: dict) -> dict:
+def model_step(train_test_dict: dict, model_params: dict, dataset_name: str) -> dict:
     model_type = model_params['model_type']
     transform_type = model_params['transform_type']
     nn_params = model_params['nn_params']
@@ -266,7 +266,7 @@ def model_step(train_test_dict: dict, model_params: dict) -> dict:
     nn_params['exg_time_max_sizes'] = train_test_dict['exg_time_max_sizes']
 
     model = ModelWrapper(
-        output_dir='./output',
+        output_dir=f'./output_{dataset_name}',
         model_type=model_type,
         model_params=nn_params,
         transform_type=transform_type,
@@ -336,7 +336,7 @@ def main():
     # with open(f"output/{path_params['type']}.pickle", "rb") as f:
     #     train_test_dict = pickle.load(f)
 
-    return model_step(train_test_dict, model_params)
+    return model_step(train_test_dict, model_params, str())
 
 
 def main2():
@@ -360,12 +360,16 @@ def main2():
 
             print(dataset_name)
 
-            path_params["ex_filename"] = "./data/USHCN/" + subset
+            if 'ushcn' in dataset_name:
+                path_params["ex_filename"] = "./data/USHCN/" + subset
+            else:
+                path_params['ex_filename'] = "./data/FrenchPiezo/" + subset
+
             path_params["nan_percentage"] = nan_num
 
             try:
                 train_test_dict = data_step(path_params, prep_params, eval_params)
-                print(model_step(train_test_dict, model_params))
+                print(model_step(train_test_dict, model_params, dataset_name))
 
             except Exception as e:
                 print(f"Dataset {dataset_name} failed: {e}")
