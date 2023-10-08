@@ -41,7 +41,7 @@
     },
 
     "model_params": {
-        "transform_type": "standard",
+        "transform_type": "standard01",
         "model_type": "sttransformer",
         "nn_params": {
             "kernel_size": 5,
