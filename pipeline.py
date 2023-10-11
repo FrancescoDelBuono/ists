@@ -352,27 +352,29 @@ def main2():
         'subset_agg_th15_3.csv'
     ]
 
-    for nan_num in [0.0, 0.2, 0.5, 0.8]:
-        for subset in subsets:
-            dataset_name = (f"{path_params['type']}_"
-                            f"{subset.replace('subset_agg_', '').replace('.csv', '')}_"
-                            f"nan{int(nan_num * 10)}")
+    for num_fut in [14, 30]:
+        for nan_num in [0.0, 0.2, 0.5, 0.8]:
+            for subset in subsets:
+                dataset_name = (f"{path_params['type']}_"
+                                f"{subset.replace('subset_agg_', '').replace('.csv', '')}_"
+                                f"nan{int(nan_num * 10)}")
 
-            print(dataset_name)
+                print(dataset_name)
 
-            if 'ushcn' in dataset_name:
-                path_params["ex_filename"] = "./data/USHCN/" + subset
-            else:
-                path_params['ex_filename'] = "./data/FrenchPiezo/" + subset
+                if 'ushcn' in dataset_name:
+                    path_params["ex_filename"] = "./data/USHCN/" + subset
+                else:
+                    path_params['ex_filename'] = "./data/FrenchPiezo/" + subset
 
-            path_params["nan_percentage"] = nan_num
+                path_params["nan_percentage"] = nan_num
+                prep_params['ts_params']['num_fut'] = num_fut
 
-            try:
-                train_test_dict = data_step(path_params, prep_params, eval_params)
-                print(model_step(train_test_dict, model_params, dataset_name))
+                try:
+                    train_test_dict = data_step(path_params, prep_params, eval_params)
+                    print(model_step(train_test_dict, model_params, dataset_name))
 
-            except Exception as e:
-                print(f"Dataset {dataset_name} failed: {e}")
+                except Exception as e:
+                    print(f"Dataset {dataset_name} failed: {e}")
 
 
 if __name__ == '__main__':
