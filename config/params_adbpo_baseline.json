@@ -1,0 +1,65 @@
+{
+    "path_params": {
+        "ts_filename": "../../data/Piezo/ts_all.xlsx",
+        "ctx_filename": "../../data/Piezo/data_ext_all.xlsx",
+        "ex_filename": "../../data/Piezo/NetCDF/exg_w_tp_t2m.pickle",
+        "type": "adbpo",
+        "nan_percentage": 0.0
+    },
+
+    "prep_params": {
+        "ts_params": {
+            "features": ["Piezometria (m)", "tp", "t2m_min", "t2m_max", "t2m_avg"],
+            "label_col": "Piezometria (m)",
+            "num_past": 48,
+            "num_fut": 6,
+            "freq": "M"
+        },
+        "feat_params": {
+            "null_feat": null,
+            "null_max_dist": 12,
+            "time_feats": []
+        },
+        "spt_params": {
+            "num_past": 24,
+            "num_spt": 5,
+            "max_dist_th": 10000,
+            "max_null_th": 13
+        },
+        "exg_params": {
+            "num_past": 72,
+            "features": ["tp", "t2m_min", "t2m_max", "t2m_avg"],
+            "time_feats": ["WY", "M"]
+        }
+    },
+
+    "eval_params": {
+        "train_start": "2009-01-01",
+        "test_start": "2019-01-01",
+        "label_th": 1,
+        "null_th": 13
+    },
+
+    "model_params": {
+        "transform_type": "standard",
+        "model_type": "sttransformer",
+        "nn_params": {
+            "kernel_size": 3,
+            "d_model": 64,
+            "num_heads": 4,
+            "dff": 256,
+            "fff": 64,
+            "activation": "relu",
+            "exg_cnn": true,
+            "spt_cnn": true,
+            "time_cnn": true,
+            "num_layers": 1,
+            "with_cross": true,
+            "dropout_rate": 0.1
+        },
+        "lr": 0.0004,
+        "loss": "mse",
+        "batch_size": 32,
+        "epochs": 10
+    }
+}

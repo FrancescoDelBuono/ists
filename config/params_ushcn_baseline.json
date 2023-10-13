@@ -1,0 +1,65 @@
+{
+    "path_params": {
+        "ts_filename": "../../data/USHCN/pivot_1990_1993_thr4_normalize.csv",
+        "ctx_filename": "",
+        "ex_filename": "../../data/USHCN/subset_agg_th1_1.csv",
+        "type": "ushcn",
+        "nan_percentage": 0.2
+    },
+
+    "prep_params": {
+        "ts_params": {
+            "features": ["TMAX", "SNOW", "SNWD", "PRCP", "TMIN"],
+            "label_col": "TMAX",
+            "num_past": 96,
+            "num_fut": 7,
+            "freq": "D"
+        },
+        "feat_params": {
+            "null_feat": null,
+            "null_max_dist": 12,
+            "time_feats": []
+        },
+        "spt_params": {
+            "num_past": 48,
+            "num_spt": 4,
+            "max_dist_th": 0.25,
+            "max_null_th": 13
+        },
+        "exg_params": {
+            "num_past": 96,
+            "features": ["SNOW", "SNWD", "PRCP", "TMIN"],
+            "time_feats": ["WY"]
+        }
+    },
+
+    "eval_params": {
+        "train_start": "1990-01-01",
+        "test_start": "1993-01-01",
+        "label_th": 0,
+        "null_th": 13
+    },
+
+    "model_params": {
+        "transform_type": null,
+        "model_type": "sttransformer",
+        "nn_params": {
+            "kernel_size": 5,
+            "d_model": 64,
+            "num_heads": 4,
+            "dff": 128,
+            "fff": 64,
+            "activation": "relu",
+            "exg_cnn": true,
+            "spt_cnn": true,
+            "time_cnn": true,
+            "num_layers": 2,
+            "with_cross": true,
+            "dropout_rate": 0.1
+        },
+        "lr": 0.00004,
+        "loss": "mse",
+        "batch_size": 64,
+        "epochs": 20
+    }
+}

@@ -121,7 +121,7 @@ def change_params(path_params: dict, base_string: str, new_string: str) -> dict:
     return path_params
 
 
-def data_step(path_params: dict, prep_params: dict, eval_params: dict) -> dict:
+def data_step(path_params: dict, prep_params: dict, eval_params: dict, keep_nan: bool = False) -> dict:
     ts_params = prep_params['ts_params']
     feat_params = prep_params['feat_params']
     spt_params = prep_params['spt_params']
@@ -147,7 +147,7 @@ def data_step(path_params: dict, prep_params: dict, eval_params: dict) -> dict:
         null_feat=feat_params['null_feat'],
         null_max_dist=feat_params['null_max_dist'],
         time_feats=feat_params['time_feats'],
-        # with_fill=False
+        with_fill=not keep_nan
     )
     print(f'Num of records raw: {len(x_array)}')
     # Compute feature mask and time encoding max sizes
@@ -322,7 +322,7 @@ def main():
     path_params, prep_params, eval_params, model_params = parse_params()
     # path_params = change_params(path_params, '../../data', '../../Dataset/AdbPo')
 
-    train_test_dict = data_step(path_params, prep_params, eval_params)
+    train_test_dict = data_step(path_params, prep_params, eval_params, keep_nan=False)
 
     # with open(f"output/{path_params['type']}.pickle", "wb") as f:
     #     pickle.dump(train_test_dict, f)
