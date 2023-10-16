@@ -1,8 +1,8 @@
 {
     "path_params": {
-        "ts_filename": "../../data/USHCN/pivot_1990_1993_thr4_normalize.csv",
+        "ts_filename": "./data/USHCN/pivot_1990_1993_thr4_normalize.csv",
         "ctx_filename": "",
-        "ex_filename": "../../data/USHCN/subset_agg_th1_1.csv",
+        "ex_filename": "./data/USHCN/subset_agg_th1_1.csv",
         "type": "ushcn",
         "nan_percentage": 0.2
     },
