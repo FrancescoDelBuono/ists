@@ -1,6 +1,7 @@
 import argparse
 import multiprocessing
 import os
+import socket
 from concurrent import futures
 from time import sleep
 
@@ -8,19 +9,30 @@ import torch
 
 parser = argparse.ArgumentParser('FDB')
 # train configs
-parser.add_argument('models', type=str, help="List of models to train and test separated by spaces.")
-parser.add_argument('datasets_path', type=str, help="Path of folder containing pickle datasets.")
+parser.add_argument('-m', '--model', type=str, nargs='+',
+                    help="List of models to train and test separated by spaces.", default=['GRU-D', 'CRU', 'mTAN'])
+parser.add_argument('-d', '--datasets_path', type=str, required=True, nargs='+',
+                    help="Folder containing pickle datasets or a (list of) path(s) to a pickle dataset.")
+
+if 'gnode01' in socket.gethostname():  # ARIES
+    home_path = '/unimore_home/gguiduzzi'
+
+elif 'fpdgx1' in socket.gethostname():  # LYRA
+    home_path = '/trafair/gguiduzzi'
+
+else:  # SPARC20
+    home_path = '/home/giacomo.guiduzzi'
 
 interpreters = {
-    'GRU-D': '/trafair/gguiduzzi/.virtualenvs/GRU-D/bin/python',
-    'CRU': '/trafair/gguiduzzi/.virtualenvs/cru_sm80/bin/python',
-    'mTAN': '/trafair/gguiduzzi/.virtualenvs/mtan_sm80/bin/python'
+    'GRU-D': f'{home_path}/.virtualenvs/GRU-D/bin/python',
+    'CRU': f'{home_path}/.virtualenvs/cru_sm80/bin/python',
+    'mTAN': f'{home_path}/.virtualenvs/mtan_sm80/bin/python'
 }
 
 wdirs = {
-    'GRU-D': '/trafair/gguiduzzi/GRU-D',
-    'CRU': '/trafair/gguiduzzi/Continuous-Recurrent-Units',
-    'mTAN': '/trafair/gguiduzzi/mTAN'
+    'GRU-D': f'{home_path}/GRU-D',
+    'CRU': f'{home_path}/Continuous-Recurrent-Units',
+    'mTAN': f'{home_path}/mTAN'
 }
 
 scripts = {
@@ -47,6 +59,14 @@ def launch_model(model, dataset, device_list):
 
     print(f"Process {os.getpid()} started with parameters: {model}, {dataset}")
 
+    if '/' in dataset:
+        dataset_name = dataset.split('/')[-1]
+
+    elif '\\' in dataset:
+        dataset_name = dataset.split('\\')[-1]
+    else:
+        dataset_name = dataset
+
     if model != 'GRUD-D':  # GRU-D must run on CPU because of tensorflow compatibility problems with CUDA
         while True:
             for dev, lock in device_list.items():
@@ -68,33 +88,49 @@ def launch_model(model, dataset, device_list):
     os.chdir(wdir)
     script = scripts[model]
     if model == 'GRU-D':
-        cmd_parameters = parameters[model].format(dataset, dataset)
+        cmd_parameters = parameters[model].format(dataset, dataset_name)
     elif model == 'CRU':
-        cmd_parameters = parameters[model].format(dataset, device, dataset)
+        cmd_parameters = parameters[model].format(dataset, device, dataset_name)
     elif model == 'mTAN':
-        cmd_parameters = parameters[model].format(dataset, device, dataset)
+        cmd_parameters = parameters[model].format(dataset, device, dataset_name)
     else:
         raise RuntimeError(f'Unknown model {model}')
 
     # command = interpreter + ' ' + wdir + '/' + script + ' ' + parameter
     command = ' '.join([interpreter, script, cmd_parameters])
 
-    print(f'{os.getpid()}: Launching {model} using {dataset} on {device}')
+    print(f'{os.getpid()}: Launching {model} using {dataset_name} on {device}')
     os.system(command)
-    print(f'{os.getpid()}: Finished {model} using {dataset} on {device}')
+    print(f'{os.getpid()}: Finished {model} using {dataset_name} on {device}')
 
     acquired_lock.release()
 
 
 def main():
-    if not args.models:
+    if not args.model:
         raise RuntimeError('No models specified.')
 
     if not args.datasets_path:
         raise RuntimeError('No datasets path specified.')
 
-    models = args.models.split()
-    datasets = [file for file in os.listdir(args.datasets_path) if file.endswith('.pickle')]
+    models = args.model
+
+    if len(args.datasets_path) == 1:
+        args.datasets_path = args.datasets_path[0]
+
+    if type(args.datasets_path) == str:
+        if os.path.isdir(args.datasets_path):
+            datasets = [file for file in os.listdir(args.datasets_path) if file.endswith('.pickle')]
+        elif os.path.isfile(args.datasets_path):
+            datasets = [args.datasets_path]
+        else:
+            raise ValueError(f'Could not find {args.datasets_path}.')
+
+    else:
+        if not all([file.endswith('.pickle') for file in os.listdir(args.datasets_path)]):
+            raise ValueError('Not all files in the specified folder are pickle files.')
+        else:
+            datasets = args.datasets_path
 
     if not models:
         raise ValueError('No models specified.')
