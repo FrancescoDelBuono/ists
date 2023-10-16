@@ -128,28 +128,33 @@ def main():
                             else:
                                 raise ValueError(f'Unknown model {model}.')
 
-                else:
+                else:  # ISTS
                     with (open(file, 'r') as log_file):
 
                         dataset_name = file.split(file_start[model])[-1].split('.txt')[0]
-                        subset = None
+                        subset = num_fut = None
+                        whitespace = ' '
 
                         for line in log_file:
                             if line.startswith(dataset_name):
-                                subset = line.strip()
+                                if whitespace not in line:
+                                    subset = line.strip()
+                                    num_fut = 7
+                                else:
+                                    subset, num_fut = line.strip().split()
 
                             if 'test_r2' in line and 'train_r2' in line:
                                 metrics = eval(line)
 
-                                df.loc[subset, ['Train_R2', 'Test_R2']] = \
+                                df.loc[f"{subset}_{num_fut}", ['Train_R2', 'Test_R2']] = \
                                     [metrics['train_r2'], metrics['test_r2']]
-                                df.loc[subset, ['Train_MSE', 'Test_MSE']] = \
+                                df.loc[f"{subset}_{num_fut}", ['Train_MSE', 'Test_MSE']] = \
                                     [metrics['train_mse'], metrics['test_mse']]
-                                df.loc[subset, ['Train_MAE', 'Test_MAE']] = \
+                                df.loc[f"{subset}_{num_fut}", ['Train_MAE', 'Test_MAE']] = \
                                     [metrics['train_mae'], metrics['test_mae']]
 
                                 for epoch, (loss, val_loss) in enumerate(zip(metrics['loss'], metrics['val_loss'])):
-                                    loss_df.loc[subset, [f'Loss_{epoch}', f'Val_Loss_{epoch}']] = \
+                                    loss_df.loc[f"{subset}_{num_fut}", [f'Loss_{epoch}', f'Val_Loss_{epoch}']] = \
                                         [loss, val_loss]
 
         os.chdir(wdir)
