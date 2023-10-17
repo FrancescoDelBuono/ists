@@ -13,6 +13,8 @@ parser.add_argument('-m', '--model', type=str, nargs='+',
                     help="List of models to train and test separated by spaces.", default=['GRU-D', 'CRU', 'mTAN'])
 parser.add_argument('-d', '--datasets_path', type=str, required=True, nargs='+',
                     help="Folder containing pickle datasets or a (list of) path(s) to a pickle dataset.")
+parser.add_argument('--device', nargs='+', default='cuda:0',
+                    type=str, help='Device to use for training and testing.')
 
 if 'gnode01' in socket.gethostname():  # ARIES
     home_path = '/unimore_home/gguiduzzi'
@@ -139,7 +141,10 @@ def main():
         raise ValueError('No datasets found.')
 
     with multiprocessing.Manager() as manager:
-        devices = manager.dict({f'cuda:{idx}': manager.Lock() for idx in range(torch.cuda.device_count())})
+        if args.device == 'all':
+            devices = manager.dict({f'cuda:{idx}': manager.Lock() for idx in range(torch.cuda.device_count())})
+        else:
+            devices = manager.dict({cuda_dev: manager.Lock() for cuda_dev in args.device})
 
         with futures.ProcessPoolExecutor(max_workers=len(devices)) as executor:
             for dataset in datasets:

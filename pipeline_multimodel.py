@@ -16,14 +16,14 @@ import tensorflow as tf
 parser = argparse.ArgumentParser()
 parser.add_argument('-f', '--file', type=str, required=True,
                     help='the path where the configuration is stored.')
-parser.add_argument('--device', type=str,
-                    default='cuda:0' if len(tf.config.list_physical_devices('GPU')) > 0 else 'cpu',
+parser.add_argument('--device', type=str, nargs='+',
+                    default=['cuda:0'] if len(tf.config.list_physical_devices('GPU')) > 0 else ['cpu'],
                     help='device to use (cpu, cuda:0, cuda:1, ...)')
 
 parser.add_argument('--model', type=str, nargs='+', default=['ISTS'],
                     help='model to use (ISTS, CRU, mTAN, GRU-D, ...)')
 
-parser.add_argument('--num_fut', type=int, nargs='+', default=7,
+parser.add_argument('--num_fut', type=int, nargs='+', default=[7],
                     help='number of days from the present to predict.')
 parser.add_argument('--nan_num', type=float, nargs='+', default=[0.0, 0.2, 0.5, 0.8])
 parser.add_argument('--subset', type=str, nargs='+',
@@ -40,8 +40,9 @@ def parse_params():
     """ Parse input parameters. """
 
     gpus = tf.config.list_physical_devices('GPU')
-    gpu_idx = int(args.device[-1])
-    tf.config.set_visible_devices(gpus[gpu_idx], 'GPU')
+    gpus_idx = [int(dev[-1]) for dev in args.device]
+    selected_gpus = [gpu for i, gpu in enumerate(gpus) if i in gpus_idx]
+    tf.config.set_visible_devices(selected_gpus, 'GPU')
 
     conf_file = args.file
     assert os.path.exists(conf_file), 'Configuration file does not exist'
@@ -381,7 +382,8 @@ def main():
                             pickle.dump(train_test_dict, f)
 
                         command = (f'python3 launch_experiments.py --model {" ".join(models)} --dataset '
-                                   f'{os.path.abspath(os.path.join("./tmp_datasets", dataset_name))}.pickle')
+                                   f'{os.path.abspath(os.path.join("./tmp_datasets", dataset_name))}.pickle '
+                                   f'--device {" ".join(args.device)}')
 
                         print(command)
 
