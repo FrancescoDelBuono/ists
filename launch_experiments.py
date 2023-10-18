@@ -16,7 +16,9 @@ parser.add_argument('-d', '--datasets_path', type=str, required=True, nargs='+',
 parser.add_argument('--device', nargs='+', default='cuda:0',
                     type=str, help='Device to use for training and testing.')
 
-if 'gnode01' in socket.gethostname():  # ARIES
+hostname = socket.gethostname()
+
+if 'gnode' in hostname or 'cnode' in hostname or 'fnode' in hostname:  # ARIES
     home_path = '/unimore_home/gguiduzzi'
 
 elif 'fpdgx1' in socket.gethostname():  # LYRA

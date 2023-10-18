@@ -39,10 +39,11 @@ args = parser.parse_args()
 def parse_params():
     """ Parse input parameters. """
 
-    gpus = tf.config.list_physical_devices('GPU')
-    gpus_idx = [int(dev[-1]) for dev in args.device]
-    selected_gpus = [gpu for i, gpu in enumerate(gpus) if i in gpus_idx]
-    tf.config.set_visible_devices(selected_gpus, 'GPU')
+    if args.device[0] != 'cpu':
+        gpus = tf.config.list_physical_devices('GPU')
+        gpus_idx = [int(dev[-1]) for dev in args.device]
+        selected_gpus = [gpu for i, gpu in enumerate(gpus) if i in gpus_idx]
+        tf.config.set_visible_devices(selected_gpus, 'GPU')
 
     conf_file = args.file
     assert os.path.exists(conf_file), 'Configuration file does not exist'
@@ -377,12 +378,14 @@ def main():
                     if models:  # if there are other models to run, meaning the list is not empty
                         train_test_dict = data_step(path_params, prep_params, eval_params,
                                                     keep_nan=True)
-                        os.makedirs('./tmp_datasets', exist_ok=True)
-                        with open(f'./tmp_datasets/{dataset_name}.pickle', 'wb') as f:
+                        tmp_datasets_path = f'./tmp_datasets_{os.getpid()}'
+                        os.makedirs(tmp_datasets_path, exist_ok=True)
+                        dataset_file_path = os.path.join(tmp_datasets_path, f'{dataset_name}.pickle')
+                        with open(dataset_file_path, 'wb') as f:
                             pickle.dump(train_test_dict, f)
 
                         command = (f'python3 launch_experiments.py --model {" ".join(models)} --dataset '
-                                   f'{os.path.abspath(os.path.join("./tmp_datasets", dataset_name))}.pickle '
+                                   f'{os.path.abspath(dataset_file_path)} '
                                    f'--device {" ".join(args.device)}')
 
                         print(command)
