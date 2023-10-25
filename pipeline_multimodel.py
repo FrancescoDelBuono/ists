@@ -380,7 +380,7 @@ def main():
                                                     keep_nan=True)
                         tmp_datasets_path = f'./tmp_datasets_{os.getpid()}'
                         os.makedirs(tmp_datasets_path, exist_ok=True)
-                        dataset_file_path = os.path.join(tmp_datasets_path, f'{dataset_name}.pickle')
+                        dataset_file_path = os.path.join(tmp_datasets_path, f'{dataset_name}_nf{num_fut}.pickle')
                         with open(dataset_file_path, 'wb') as f:
                             pickle.dump(train_test_dict, f)
 
