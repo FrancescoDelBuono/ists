@@ -32,6 +32,8 @@ parser.add_argument('--subset', type=str, nargs='+',
                              'subset_agg_th15_3.csv'
                              ],
                     help='subset of the dataset to use.')
+parser.add_argument('--model_type', type=str, nargs='+',
+                    default=['sttransformer', 't', 's', 'e', 'ts', 'te', 'se'])
 
 args = parser.parse_args()
 
@@ -372,8 +374,9 @@ def main():
                         print("Running ISTS first...")
                         train_test_dict = data_step(path_params, prep_params, eval_params,
                                                     keep_nan=False)
-
-                        print(model_step(train_test_dict, model_params, dataset_name))
+                        for model_type in args.model_type:
+                            model_params['model_type'] = model_type
+                            print(model_step(train_test_dict, model_params, dataset_name))
 
                     if models:  # if there are other models to run, meaning the list is not empty
                         train_test_dict = data_step(path_params, prep_params, eval_params,
