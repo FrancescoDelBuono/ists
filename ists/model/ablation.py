@@ -1,10 +1,10 @@
 import tensorflow as tf
 
 from .embedding import TemporalEmbedding, SpatialEmbedding
-from .encoder import EncoderLayer
+from .encoder import EncoderLayer, CrossEncoderLayer
 
 
-class TransformerTemporal(tf.keras.layers.Layer):
+class TransformerTemporal(tf.keras.Model):
     def __init__(
             self,
             *,
@@ -55,7 +55,7 @@ class TransformerTemporal(tf.keras.layers.Layer):
         return pred
 
 
-class TransformerExogenous(tf.keras.layers.Layer):
+class TransformerExogenous(tf.keras.Model):
     def __init__(
             self,
             *,
@@ -104,7 +104,7 @@ class TransformerExogenous(tf.keras.layers.Layer):
         return pred
 
 
-class TransformerSpatial(tf.keras.layers.Layer):
+class TransformerSpatial(tf.keras.Model):
     def __init__(
             self,
             *,
@@ -157,7 +157,7 @@ class TransformerSpatial(tf.keras.layers.Layer):
         return pred
 
 
-class TransformerTemporalSpatial(tf.keras.layers.Layer):
+class TransformerTemporalSpatial(tf.keras.Model):
     def __init__(
             self,
             *,
@@ -177,6 +177,7 @@ class TransformerTemporalSpatial(tf.keras.layers.Layer):
             null_max_size=None,
             time_max_sizes=None,
             exg_time_max_sizes=None,
+            **kwargs
     ):
         super().__init__()
 
@@ -251,7 +252,7 @@ class TransformerTemporalSpatial(tf.keras.layers.Layer):
         return pred
 
 
-class TransformerSpatialExogenous(tf.keras.layers.Layer):
+class TransformerSpatialExogenous(tf.keras.Model):
     def __init__(
             self,
             *,
@@ -271,8 +272,26 @@ class TransformerSpatialExogenous(tf.keras.layers.Layer):
             null_max_size=None,
             time_max_sizes=None,
             exg_time_max_sizes=None,
+            **kwargs
     ):
         super().__init__()
+
+        self.temporal_embedder = TemporalEmbedding(
+            d_model=d_model,
+            kernel_size=kernel_size,
+            feature_mask=feature_mask,
+            with_cnn=time_cnn,
+            null_max_size=null_max_size,
+            time_max_sizes=time_max_sizes,
+        )
+
+        self.temporal_encoder = EncoderLayer(
+            d_model=d_model,
+            num_heads=num_heads,
+            dff=dff,
+            dropout_rate=dropout_rate,
+            activation=activation,
+        )
 
         self.exogenous_embedder = TemporalEmbedding(
             d_model=d_model,
@@ -282,7 +301,7 @@ class TransformerSpatialExogenous(tf.keras.layers.Layer):
             time_max_sizes=exg_time_max_sizes,
         )
 
-        self.exogenous_encoder = EncoderLayer(
+        self.exogenous_encoder = CrossEncoderLayer(
             d_model=d_model,
             num_heads=num_heads,
             dff=dff,
@@ -321,13 +340,17 @@ class TransformerSpatialExogenous(tf.keras.layers.Layer):
         self.final_layer = tf.keras.layers.Dense(1)
 
     def call(self, inputs, **kwargs):
-        # temporal_x = inputs[0]
+        temporal_x = inputs[0]
         exogenous_x = inputs[1]
         spatial_array = inputs[2:]
 
         # Temporal Embedding and Encoder
+        temporal_x = self.temporal_embedder(temporal_x)
+        temporal_x = self.temporal_encoder(temporal_x)
+
+        # Exogenous Embedding and Encoder
         exogenous_x = self.exogenous_embedder(exogenous_x)
-        exogenous_x = self.exogenous_embedder(exogenous_x)
+        exogenous_x = self.exogenous_encoder(x=exogenous_x, context=temporal_x)
 
         # Spatial Embedding and Encoder
         spatial_x = self.spatial_embedder(spatial_array)
@@ -344,7 +367,7 @@ class TransformerSpatialExogenous(tf.keras.layers.Layer):
         return pred
 
 
-class TransformerTemporalExogenous(tf.keras.layers.Layer):
+class TransformerTemporalExogenous(tf.keras.Model):
 
     def __init__(
             self,
@@ -365,6 +388,7 @@ class TransformerTemporalExogenous(tf.keras.layers.Layer):
             null_max_size=None,
             time_max_sizes=None,
             exg_time_max_sizes=None,
+            **kwargs
     ):
         super().__init__()
 
@@ -393,7 +417,7 @@ class TransformerTemporalExogenous(tf.keras.layers.Layer):
             time_max_sizes=exg_time_max_sizes,
         )
 
-        self.exogenous_encoder = EncoderLayer(
+        self.exogenous_encoder = CrossEncoderLayer(
             d_model=d_model,
             num_heads=num_heads,
             dff=dff,
@@ -423,8 +447,8 @@ class TransformerTemporalExogenous(tf.keras.layers.Layer):
         temporal_x = self.temporal_encoder(temporal_x)
 
         # Spatial Embedding and Encoder
-        exogenous_x = self.spatial_embedder(exogenous_x)
-        exogenous_x = self.spatial_encoder(exogenous_x)
+        exogenous_x = self.exogenous_embedder(exogenous_x)
+        exogenous_x = self.exogenous_encoder(x=exogenous_x, context=temporal_x)
 
         # Global Encoder
         embedded_x = tf.concat([temporal_x, exogenous_x], axis=1)
