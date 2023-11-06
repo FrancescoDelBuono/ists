@@ -266,7 +266,7 @@ def data_step(path_params: dict, prep_params: dict, eval_params: dict, keep_nan:
     return res
 
 
-def model_step(train_test_dict: dict, model_params: dict, dataset_name: str) -> dict:
+def model_step(train_test_dict: dict, model_params: dict, checkpoint_dir: str) -> dict:
     model_type = model_params['model_type']
     transform_type = model_params['transform_type']
     nn_params = model_params['nn_params']
@@ -284,7 +284,7 @@ def model_step(train_test_dict: dict, model_params: dict, dataset_name: str) -> 
     nn_params['exg_time_max_sizes'] = train_test_dict['exg_time_max_sizes']
 
     model = ModelWrapper(
-        output_dir=f'./output_{dataset_name}',
+        checkpoint_dir=checkpoint_dir,
         model_type=model_type,
         model_params=nn_params,
         transform_type=transform_type,
@@ -341,6 +341,12 @@ def main():
     if ('ISTS' in args.model and 'baseline' in args.file) or ('ISTS' not in args.model and 'baseline' not in args.file):
         raise ValueError('Baseline config files are for models different from ISTS.')
 
+    tmp_datasets_path = str()
+
+    if args.model != ['ISTS']:
+        tmp_datasets_path = f'./tmp_datasets_{os.getpid()}'
+        os.makedirs(tmp_datasets_path, exist_ok=True)
+
     run_num = 0
 
     for num_fut in args.num_fut:
@@ -376,13 +382,13 @@ def main():
                                                     keep_nan=False)
                         for model_type in args.model_type:
                             model_params['model_type'] = model_type
-                            print(model_step(train_test_dict, model_params, dataset_name))
+                            checkpoint_dir = f'./output_{dataset_name}_{subset}_{nan_num}_{num_fut}_{model_type}'
+                            print(model_step(train_test_dict, model_params, checkpoint_dir))
 
                     if models:  # if there are other models to run, meaning the list is not empty
                         train_test_dict = data_step(path_params, prep_params, eval_params,
                                                     keep_nan=True)
-                        tmp_datasets_path = f'./tmp_datasets_{os.getpid()}'
-                        os.makedirs(tmp_datasets_path, exist_ok=True)
+
                         dataset_file_path = os.path.join(tmp_datasets_path, f'{dataset_name}_nf{num_fut}.pickle')
                         with open(dataset_file_path, 'wb') as f:
                             pickle.dump(train_test_dict, f)
@@ -395,13 +401,13 @@ def main():
 
                         os.system(command)
 
-                        os.remove(f'./tmp_datasets/{dataset_name}.pickle')
+                        os.remove(dataset_file_path)
 
                 except Exception as e:
                     print(f"Dataset {dataset_name} failed: {e}")
 
-    if os.path.exists('./tmp_datasets'):
-        os.rmdir('./tmp_datasets')
+    if os.path.exists(tmp_datasets_path):
+        os.rmdir(tmp_datasets_path)
 
 
 if __name__ == '__main__':
