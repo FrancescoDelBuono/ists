@@ -157,7 +157,7 @@ def delete_non_empty_directory(directory_path):
 class ModelWrapper(object):
     def __init__(
             self,
-            output_dir: str,
+            checkpoint_dir: str,
             model_type: str,
             model_params: dict,
             transform_type: str = None,
@@ -172,8 +172,10 @@ class ModelWrapper(object):
             self.spt_transformer = get_transformer(transform_type)
             self.exg_transformer = get_transformer(transform_type)
 
-        self.checkpoint_dir = os.path.join(output_dir, 'best_model')
-        self.checkpoint_path = os.path.join(output_dir, 'best_model', f'cp.ckpt')
+        self.checkpoint_delete_folder = False
+        self.checkpoint_basedir = checkpoint_dir
+        self.checkpoint_dir = os.path.join(self.checkpoint_basedir, 'best_model')
+        self.checkpoint_path = os.path.join(self.checkpoint_basedir, 'best_model', 'cp.ckpt')
 
         self.best_valid = best_valid
         self.loss = loss
@@ -185,8 +187,11 @@ class ModelWrapper(object):
         self.feature_mask = model_params['feature_mask']
         self.exg_feature_mask = model_params['exg_feature_mask']
 
-        # Create output directory if it does not exist
-        os.makedirs(output_dir, exist_ok=True)
+        # Check if model output dir exists
+        if not os.path.isdir(self.checkpoint_basedir):
+            os.makedirs(self.checkpoint_basedir, exist_ok=True)
+            self.checkpoint_delete_folder = True
+            # raise ValueError(f'Model output dir does not exist: {checkpoint_dir}')
 
         # Create checkpoint directory if it does not exist
         os.makedirs(self.checkpoint_dir, exist_ok=True)
@@ -239,6 +244,8 @@ class ModelWrapper(object):
     def _remove_model_checkpoint(self):
         if os.path.isdir(self.checkpoint_dir):
             delete_non_empty_directory(self.checkpoint_dir)
+        if self.checkpoint_delete_folder:
+            os.rmdir(self.checkpoint_basedir)
 
     def _get_best_model(self):
         if self.best_valid and not os.path.isdir(self.checkpoint_dir):
@@ -270,17 +277,17 @@ class ModelWrapper(object):
         x, spt, exg = self._fit_transform(x, spt, exg)
         y = self._label_transform(y)
 
-        x_test, spt_test, exg_test, y_test = extra['x'], extra['spt'], extra['exg'], extra['y']
-        x_test, spt_test, exg_test = self._fit_transform(x_test, spt_test, exg_test)
-        y_test = self._label_transform(y_test)
-
-        test_callback = FunctionCallback(
-            x_test,
-            spt_test,
-            exg_test,
-            y_test,
-            transformer=self.transformer if self.transform_type else None
-        )
+        # x_test, spt_test, exg_test, y_test = extra['x'], extra['spt'], extra['exg'], extra['y']
+        # x_test, spt_test, exg_test = self._fit_transform(x_test, spt_test, exg_test)
+        # y_test = self._label_transform(y_test)
+        #
+        # test_callback = FunctionCallback(
+        #     x_test,
+        #     spt_test,
+        #     exg_test,
+        #     y_test,
+        #     transformer=self.transformer if self.transform_type else None
+        # )
         model_checkpoint = tf.keras.callbacks.ModelCheckpoint(
             self.checkpoint_path,
             monitor='val_loss',
@@ -312,7 +319,7 @@ class ModelWrapper(object):
             validation_split=validation_split,
             # verbose=verbose,
             verbose=0,
-            callbacks=[test_callback, model_checkpoint]
+            callbacks=[model_checkpoint]
         )
 
         # Load best model
