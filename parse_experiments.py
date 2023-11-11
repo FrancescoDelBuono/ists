@@ -40,7 +40,7 @@ def parse_ists(file):
     df = df_dict['ISTS']
 
     whitespace = ' '
-    num_fut = subset = model_type = None
+    num_fut = nan_num = subset = model_type = None
 
     with open(file, 'r') as log_file:
         info_line = log_file.readline()
@@ -52,6 +52,8 @@ def parse_ists(file):
     for info in info_line:
         if 'num_fut' in info:
             num_fut = info.split('=')[-1]
+        elif 'nan_num' in info:
+            nan_num = info.split('=')[-1]
         elif 'subset' in info:
             subset = info.split('=')[-1].split('.csv')[0]
         elif 'model_type' in info:
@@ -62,15 +64,15 @@ def parse_ists(file):
             if 'test_r2' in line and 'train_r2' in line:
                 metrics = eval(line)
 
-                df.loc[f"{dataset_name}_{subset}_nf{num_fut}_{model_type}", ['Train_R2', 'Test_R2']] = \
+                df.loc[f"{dataset_name}_{subset}_{nan_num}_nf{num_fut}_{model_type}", ['Train_R2', 'Test_R2']] = \
                     [metrics['train_r2'], metrics['test_r2']]
-                df.loc[f"{dataset_name}_{subset}_nf{num_fut}_{model_type}", ['Train_MSE', 'Test_MSE']] = \
+                df.loc[f"{dataset_name}_{subset}_{nan_num}_nf{num_fut}_{model_type}", ['Train_MSE', 'Test_MSE']] = \
                     [metrics['train_mse'], metrics['test_mse']]
-                df.loc[f"{dataset_name}_{subset}_nf{num_fut}_{model_type}", ['Train_MAE', 'Test_MAE']] = \
+                df.loc[f"{dataset_name}_{subset}_{nan_num}_nf{num_fut}_{model_type}", ['Train_MAE', 'Test_MAE']] = \
                     [metrics['train_mae'], metrics['test_mae']]
 
                 for epoch, (loss, val_loss) in enumerate(zip(metrics['loss'], metrics['val_loss'])):
-                    loss_df.loc[f"{dataset_name}_{subset}_nf{num_fut}_{model_type}",
+                    loss_df.loc[f"{dataset_name}_{subset}_{nan_num}_nf{num_fut}_{model_type}",
                                 [f'Loss_{epoch}', f'Val_Loss_{epoch}']] = [loss, val_loss]
 
     # maybe superfluous
