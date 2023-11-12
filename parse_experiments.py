@@ -104,7 +104,7 @@ def parse_model(model, file):
 
                         for line, metric in zip(metrics, ['R2', 'MAE', 'MSE']):
                             # train, valid, test
-                            line = line.strip().lstrip(f'{metric} score: ')
+                            line = line.strip().split(f'{metric} score: ')[-1]
                             try:
                                 metrics = eval(line)
 
@@ -132,8 +132,8 @@ def parse_model(model, file):
                             train_valid, test = line.split(f'Test RMSE:' if 'RMSE' in line
                                                            else f'Test {metric}:')
 
-                            train_valid = train_valid.rstrip(', ').lstrip(f'Train RMSE: ' if 'RMSE' in line
-                                                                          else f'Train {metric}: ')
+                            train_valid = train_valid.split(', ')[:-1].split(f'Train RMSE: ' if 'RMSE' in line
+                                                                             else f'Train {metric}: ')[-1]
                             train_valid = float(train_valid)
                             test = float(test.strip())
 
@@ -148,9 +148,9 @@ def parse_model(model, file):
                     metrics = metrics[-3].split(', ')
 
                     if len(metrics) > 5 and 'train_mse' in metrics[4]:
-                        train_mse = metrics[4].lstrip('train_mse: ')
-                        train_mae = metrics[5].lstrip('train_mae: ')
-                        train_r2 = metrics[6].lstrip('train_r2: ')
+                        train_mse = metrics[4].split('train_mse: ')[-1]
+                        train_mae = metrics[5].split('train_mae: ')[-1]
+                        train_r2 = metrics[6].split('train_r2: ')[-1]
 
                         train_mse = float(train_mse) if train_mse != 'nan' else np.nan
                         train_mae = float(train_mae) if train_mae != 'nan' else np.nan
@@ -158,9 +158,9 @@ def parse_model(model, file):
 
                         df.loc[f"{dataset_name}_{subset}_{num_fut}", ['Train_MSE', 'Train_MAE', 'Train_R2']] = \
                             [train_mse, train_mae, train_r2]
-                        val_mse = metrics[9].lstrip('val_mse: ')
-                        val_mae = metrics[10].lstrip('val_mae: ')
-                        val_r2 = metrics[11].lstrip('val_r2: ')
+                        val_mse = metrics[9].split('val_mse: ')[-1]
+                        val_mae = metrics[10].split('val_mae: ')[-1]
+                        val_r2 = metrics[11].split('val_r2: ')[-1]
 
                         val_mse = float(val_mse) if val_mse != 'nan' else np.nan
                         val_mae = float(val_mae) if val_mae != 'nan' else np.nan
@@ -168,9 +168,9 @@ def parse_model(model, file):
 
                         df.loc[f"{dataset_name}_{subset}_{num_fut}", ['Valid_MSE', 'Valid_MAE', 'Valid_R2']] = \
                             [val_mse, val_mae, val_r2]
-                        test_mse = metrics[13].lstrip('test_mse: ')
-                        test_mae = metrics[14].lstrip('test_mae: ')
-                        test_r2 = metrics[15].lstrip('test_r2: ')
+                        test_mse = metrics[13].split('test_mse: ')[-1]
+                        test_mae = metrics[14].split('test_mae: ')[-1]
+                        test_r2 = metrics[15].split('test_r2: ')[-1].strip()
 
                         test_mse = float(test_mse) if test_mse != 'nan' else np.nan
                         test_mae = float(test_mae) if test_mae != 'nan' else np.nan
