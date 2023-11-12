@@ -132,8 +132,8 @@ def parse_model(model, file):
                             train_valid, test = line.split(f'Test RMSE:' if 'RMSE' in line
                                                            else f'Test {metric}:')
 
-                            train_valid = train_valid.split(', ')[:-1].split(f'Train RMSE: ' if 'RMSE' in line
-                                                                             else f'Train {metric}: ')[-1]
+                            train_valid = train_valid.split(', ')[0].split(f'Train RMSE: ' if 'RMSE' in line
+                                                                           else f'Train {metric}: ')[-1]
                             train_valid = float(train_valid)
                             test = float(test.strip())
 
