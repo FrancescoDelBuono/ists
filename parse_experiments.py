@@ -7,13 +7,19 @@ import pandas as pd
 parser = argparse.ArgumentParser('FDB Parser')
 # train configs
 parser.add_argument('--ignore-incomplete', action='store_true', default=False,
-                    help="List of models to train and test separated by spaces.")
+                    help="Ignores incomplete model runs instead of raising an Exception.")
 
 parser.add_argument('--models', nargs='+', default=['GRU-D', 'CRU', 'mTAN', 'ISTS'],
-                    help="List of model logs to parse separated by spaces.")
+                    help="List of models to gather logs for.")
 
 parser.add_argument('--folder', type=str, default=None,
                     help="Folder containing the logs to parse if you prefer to skip the default behaviour.")
+
+parser.add_argument('--paper_table', action='store_true', default=False,
+                    help="Prepares data in a format useful for reporting it in a paper.")
+
+parser.add_argument('--metric', type=str, default='Test_MAE',
+                    help="Metric to extract when using the --paper_table flag.")
 
 args = parser.parse_args()
 
@@ -30,6 +36,8 @@ file_start = {
     'mTAN': 'mtan_output_',
     'ISTS': 'ists_output_'
 }
+
+models = ['ISTS', 'GRU-D', 'CRU', 'mTAN']
 
 df_dict = {model: pd.DataFrame() for model in args.models}
 loss_df = pd.DataFrame()
@@ -80,22 +88,25 @@ def parse_ists(file):
 
 
 def parse_model(model, file):
+    underscore = '_'
     df = df_dict[model]
+
     dataset_name = file.split(file_start[model])[-1]
     dataset_name = dataset_name.split('.pickle.txt' if 'pickle' in file else '.txt')[0]
 
-    underscore = '_'
-
-    subset = underscore.join(dataset_name.split(underscore)[:-1])
-    num_fut = dataset_name.split(underscore)[-1].split('nf')[-1]
+    # subset = underscore.join(dataset_name.split(underscore)[:-1])
+    # num_fut = dataset_name.split(underscore)[-1].split('nf')[-1]
 
     if model != 'ISTS':
         with open(file, 'r') as log_file:
             metrics = log_file.readlines()[-20:]
 
+            if not metrics:
+                return  # file is not complete or empty
+
             if 'ValueError' in metrics[-1]:  # if error save NaN
                 for mode in ['Train', 'Valid', 'Test']:
-                    df.loc[f"{dataset_name}_{subset}_{num_fut}", [f'{mode}_R2', f'{mode}_MSE', f'{mode}_MAE']] = np.nan
+                    df.loc[dataset_name, [f'{mode}_R2', f'{mode}_MSE', f'{mode}_MAE']] = np.nan
 
             else:  # parse the file with the correct modality per model
                 if model == 'GRU-D':
@@ -114,7 +125,7 @@ def parse_model(model, file):
                                 continue
 
                             if isinstance(metrics, list):
-                                df.loc[f"{dataset_name}_{subset}_{num_fut}",
+                                df.loc[dataset_name,
                                        [f'Train_{metric}', f'Valid_{metric}', f'Test_{metric}']] = metrics
 
                             else:
@@ -137,9 +148,9 @@ def parse_model(model, file):
                             train_valid = float(train_valid)
                             test = float(test.strip())
 
-                            df.loc[f"{dataset_name}_{subset}_{num_fut}",
+                            df.loc[dataset_name,
                                    [f'Train_{metric}', f'Valid_{metric}']] = train_valid
-                            df.loc[f"{dataset_name}_{subset}_{num_fut}", f'Test_{metric}'] = test
+                            df.loc[dataset_name, f'Test_{metric}'] = test
                     else:
                         if not args.ignore_incomplete:
                             raise ValueError(f'Could not parse {file}: unknown structure.')
@@ -156,7 +167,7 @@ def parse_model(model, file):
                         train_mae = float(train_mae) if train_mae != 'nan' else np.nan
                         train_r2 = float(train_r2) if train_r2 != 'nan' else np.nan
 
-                        df.loc[f"{dataset_name}_{subset}_{num_fut}", ['Train_MSE', 'Train_MAE', 'Train_R2']] = \
+                        df.loc[dataset_name, ['Train_MSE', 'Train_MAE', 'Train_R2']] = \
                             [train_mse, train_mae, train_r2]
                         val_mse = metrics[9].split('val_mse: ')[-1]
                         val_mae = metrics[10].split('val_mae: ')[-1]
@@ -166,7 +177,7 @@ def parse_model(model, file):
                         val_mae = float(val_mae) if val_mae != 'nan' else np.nan
                         val_r2 = float(val_r2) if val_r2 != 'nan' else np.nan
 
-                        df.loc[f"{dataset_name}_{subset}_{num_fut}", ['Valid_MSE', 'Valid_MAE', 'Valid_R2']] = \
+                        df.loc[dataset_name, ['Valid_MSE', 'Valid_MAE', 'Valid_R2']] = \
                             [val_mse, val_mae, val_r2]
                         test_mse = metrics[13].split('test_mse: ')[-1]
                         test_mae = metrics[14].split('test_mae: ')[-1]
@@ -176,7 +187,7 @@ def parse_model(model, file):
                         test_mae = float(test_mae) if test_mae != 'nan' else np.nan
                         test_r2 = float(test_r2) if test_r2 != 'nan' else np.nan
 
-                        df.loc[f"{dataset_name}_{subset}_{num_fut}", ['Test_MSE', 'Test_MAE', 'Test_R2']] = \
+                        df.loc[dataset_name, ['Test_MSE', 'Test_MAE', 'Test_R2']] = \
                             [test_mse, test_mae, test_r2]
 
                     else:
@@ -218,12 +229,48 @@ def main():
 
         os.chdir(wdir)
 
-    for model, df in df_dict.items():
-        df.rename_axis(index='Subset', inplace=True)
-        df.to_csv(f'{model}_results.csv')
+    if args.paper_table:
+        columns = pd.MultiIndex.from_tuples([(model, nan_num) for nan_num in [0.2, 0.5, 0.8] for model in models],
+                                            names=['model', 'nan_num'])
+        complete_dfs = {num_fut: pd.DataFrame(columns=columns) for num_fut in [7, 14, 30, 60]}
+        for num_fut, complete_df in complete_dfs.items():
+            complete_df.rename_axis(index='Dataset', inplace=True)
+            # french_subset_agg_th1_1_0.2_nf14_sttransformer
+            for model, df in df_dict.items():
+                subset_df = df.loc[df.index.str.contains(f'nf{num_fut}')]
+                parameters = subset_df.index.to_series().apply(lambda dataset_: dataset_.split('_'))
+                subset_idx = -1
+                nan_idx = -1
+
+                for dataset_params in parameters:
+                    original_dataset_name = '_'.join(dataset_params)
+
+                    for param in dataset_params:
+                        if param.startswith('th'):
+                            subset_idx = dataset_params.index(param)
+                        if param.startswith('nan'):
+                            nan_idx = dataset_params.index(param)
+
+                    dataset = dataset_params[subset_idx - 1]
+                    subset = '_'.join(dataset_params[subset_idx:nan_idx])
+                    nan_num = float(dataset_params[nan_idx].split('nan')[-1]) / 10
+                    # num_fut = dataset_params[nan_idx + 1]
+                    # model_type = dataset_params[-1]
+
+                    complete_df.loc[f"{dataset}_{subset}",
+                                    (model, nan_num)] = subset_df.loc[original_dataset_name, args.metric]
+            complete_df: pd.DataFrame
+            complete_df.sort_index(inplace=True)
+            complete_df.sort_index(axis=1, level=['model', 'nan_num'], ascending=[True, True], inplace=True)
+            complete_df.to_csv(f'complete_results_nf{num_fut}_{args.metric}.csv')
+
+    else:
+        for model, df in df_dict.items():
+            df.rename_axis(index='Dataset', inplace=True)
+            df.to_csv(f'{model}_results.csv')
 
     if not loss_df.empty:
-        loss_df.rename_axis(index='Subset', inplace=True)
+        loss_df.rename_axis(index='Dataset', inplace=True)
         loss_df.to_csv('ists_losses.csv')
 
 
