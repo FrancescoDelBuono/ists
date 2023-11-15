@@ -122,19 +122,12 @@ def main():
     if len(args.datasets_path) == 1:
         args.datasets_path = args.datasets_path[0]
 
-    if type(args.datasets_path) == str:
-        if os.path.isdir(args.datasets_path):
-            datasets = [file for file in os.listdir(args.datasets_path) if file.endswith('.pickle')]
-        elif os.path.isfile(args.datasets_path):
-            datasets = [args.datasets_path]
-        else:
-            raise ValueError(f'Could not find {args.datasets_path}.')
-
+    if os.path.isdir(args.datasets_path):
+        datasets = [file for file in os.listdir(args.datasets_path) if file.endswith('.pickle')]
+    elif os.path.isfile(args.datasets_path):
+        datasets = [args.datasets_path]
     else:
-        if not all([file.endswith('.pickle') for file in os.listdir(args.datasets_path)]):
-            raise ValueError('Not all files in the specified folder are pickle files.')
-        else:
-            datasets = args.datasets_path
+        raise ValueError(f'Could not find {args.datasets_path}.')
 
     if not models:
         raise ValueError('No models specified.')
