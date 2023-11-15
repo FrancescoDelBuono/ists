@@ -35,6 +35,12 @@ parser.add_argument('--subset', type=str, nargs='+',
 parser.add_argument('--model_type', type=str, nargs='+',
                     default=['sttransformer', 't', 's', 'e', 'ts', 'te', 'se'])
 
+parser.add_argument('--batch_run', action='store_true', default=False,
+                    help='run the models in parallel on multiple datasets and GPUs.')
+
+parser.add_argument('--dataset_folder', type=str, default=None,
+                    help='folder containing the datasets for batch run.')
+
 args = parser.parse_args()
 
 
@@ -354,7 +360,8 @@ def main():
             for subset in args.subset:
                 dataset_name = (f"{path_params['type']}_"
                                 f"{subset.replace('subset_agg_', '').replace('.csv', '')}_"
-                                f"nan{int(nan_num * 10)}")
+                                f"nan{int(nan_num * 10)}_"
+                                f"nf{num_fut}")
 
                 models = args.model.copy()
                 run_num += 1
@@ -375,9 +382,6 @@ def main():
 
                 try:
                     if 'ISTS' in models:
-                        models.remove('ISTS')
-
-                        print("Running ISTS first...")
                         train_test_dict = data_step(path_params, prep_params, eval_params,
                                                     keep_nan=False)
                         for model_type in args.model_type:
@@ -385,23 +389,26 @@ def main():
                             checkpoint_dir = f'./output_{dataset_name}_{subset}_{nan_num}_{num_fut}_{model_type}'
                             print(model_step(train_test_dict, model_params, checkpoint_dir))
 
-                    if models:  # if there are other models to run, meaning the list is not empty
-                        train_test_dict = data_step(path_params, prep_params, eval_params,
-                                                    keep_nan=True)
+                    else:  # CRU, mTAN, GRU-D
+                        if not args.batch_run:
+                            train_test_dict = data_step(path_params, prep_params, eval_params,
+                                                        keep_nan=True)
 
-                        dataset_file_path = os.path.join(tmp_datasets_path, f'{dataset_name}_nf{num_fut}.pickle')
-                        with open(dataset_file_path, 'wb') as f:
-                            pickle.dump(train_test_dict, f)
+                            dataset_file_path = os.path.join(tmp_datasets_path, f'{dataset_name}.pickle')
+                            with open(dataset_file_path, 'wb') as f:
+                                pickle.dump(train_test_dict, f)
+                        else:
+                            dataset_file_path = args.dataset_folder
 
                         command = (f'python3 launch_experiments.py --model {" ".join(models)} --dataset '
                                    f'{os.path.abspath(dataset_file_path)} '
-                                   f'--device {" ".join(args.device)}')
+                                   f'--device {" ".join(args.device) if not args.batch_run else "all"}')
 
                         print(command)
 
                         os.system(command)
 
-                        os.remove(dataset_file_path)
+                        os.system(f"rm {dataset_name}*")
 
                 except Exception as e:
                     print(f"Dataset {dataset_name} failed: {e}")
