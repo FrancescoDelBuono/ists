@@ -107,7 +107,8 @@ def launch_model(model, dataset, device_list):
     os.system(command)
     print(f'{os.getpid()}: Finished {model} using {dataset_name} on {device}')
 
-    acquired_lock.release()
+    if acquired_lock is not None:
+        acquired_lock.release()
 
 
 def main():
@@ -123,7 +124,8 @@ def main():
         args.datasets_path = args.datasets_path[0]
 
     if os.path.isdir(args.datasets_path):
-        datasets = [file for file in os.listdir(args.datasets_path) if file.endswith('.pickle')]
+        datasets = [os.path.join(args.datasets_path, file) for file in os.listdir(args.datasets_path)
+                    if file.endswith('.pickle')]
     elif os.path.isfile(args.datasets_path):
         datasets = [args.datasets_path]
     else:
@@ -136,12 +138,18 @@ def main():
         raise ValueError('No datasets found.')
 
     with multiprocessing.Manager() as manager:
-        if args.device == 'all':
+        if args.device == ['all']:
             devices = manager.dict({f'cuda:{idx}': manager.Lock() for idx in range(torch.cuda.device_count())})
         else:
             devices = manager.dict({cuda_dev: manager.Lock() for cuda_dev in args.device})
 
-        with futures.ProcessPoolExecutor(max_workers=len(devices)) as executor:
+        max_workers = len(devices) if models != ['GRU-D'] else multiprocessing.cpu_count() // 4
+
+        print("Devices: ", devices, "\nMax workers: ", max_workers)
+
+        # TODO: it appears that the number of processes able to run is somehow limited by the Manager. Having
+        #  max_workers > len(devices) still causes the program to run with at most len(devices) processes.
+        with futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
             for dataset in datasets:
                 for model in models:
                     futures_ = list()

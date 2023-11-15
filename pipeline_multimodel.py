@@ -14,7 +14,7 @@ from ists.metrics import compute_metrics
 import tensorflow as tf
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-f', '--file', type=str, required=True,
+parser.add_argument('-f', '--file', type=str, default=None,
                     help='the path where the configuration is stored.')
 parser.add_argument('--device', type=str, nargs='+',
                     default=['cuda:0'] if len(tf.config.list_physical_devices('GPU')) > 0 else ['cpu'],
@@ -42,6 +42,13 @@ parser.add_argument('--dataset_folder', type=str, default=None,
                     help='folder containing the datasets for batch run.')
 
 args = parser.parse_args()
+
+"""config_datasets_map = {
+    'config/params_ushcn.json': 'data/pickles/ushcn',
+    'config/params_french.json': 'data/pickles/french',
+    'config/params_ushcn_baseline.json': 'data/pickles/ushcn_baseline',
+    'config/params_french_baseline.json': 'data/pickles/french_baseline'
+}"""
 
 
 def parse_params():
@@ -341,10 +348,26 @@ def model_step(train_test_dict: dict, model_params: dict, checkpoint_dir: str) -
     return res
 
 
-def main():
+def batch_run():
+    models = args.model
+    dataset_folder = args.dataset_folder
+
+    command = (f'python3 launch_experiments.py --model {" ".join(models)} --dataset '
+               f'{os.path.abspath(dataset_folder)} --device all')
+
+    print(command)
+
+    os.system(command)
+
+
+def normal_run():
     path_params, prep_params, eval_params, model_params = parse_params()
 
-    if ('ISTS' in args.model and 'baseline' in args.file) or ('ISTS' not in args.model and 'baseline' not in args.file):
+    if args.file is None:
+        raise ValueError("Config file is mandatory if --batch_run is not specified.")
+
+    if (('ISTS' in args.model and 'baseline' in args.file) or
+            ('ISTS' not in args.model and 'baseline' not in args.file)):
         raise ValueError('Baseline config files are for models different from ISTS.')
 
     tmp_datasets_path = str()
@@ -390,31 +413,36 @@ def main():
                             print(model_step(train_test_dict, model_params, checkpoint_dir))
 
                     else:  # CRU, mTAN, GRU-D
-                        if not args.batch_run:
-                            train_test_dict = data_step(path_params, prep_params, eval_params,
-                                                        keep_nan=True)
+                        train_test_dict = data_step(path_params, prep_params, eval_params,
+                                                    keep_nan=True)
 
-                            dataset_file_path = os.path.join(tmp_datasets_path, f'{dataset_name}.pickle')
-                            with open(dataset_file_path, 'wb') as f:
-                                pickle.dump(train_test_dict, f)
-                        else:
-                            dataset_file_path = args.dataset_folder
+                        dataset_file_path = os.path.join(tmp_datasets_path, f'{dataset_name}.pickle')
+                        with open(dataset_file_path, 'wb') as f:
+                            pickle.dump(train_test_dict, f)
 
                         command = (f'python3 launch_experiments.py --model {" ".join(models)} --dataset '
                                    f'{os.path.abspath(dataset_file_path)} '
-                                   f'--device {" ".join(args.device) if not args.batch_run else "all"}')
+                                   f'--device {" ".join(args.device)}')
 
                         print(command)
 
                         os.system(command)
 
-                        os.system(f"rm {dataset_name}*")
+                        os.system(f"rm {os.path.join(tmp_datasets_path, dataset_name)}*")
 
                 except Exception as e:
                     print(f"Dataset {dataset_name} failed: {e}")
 
     if os.path.exists(tmp_datasets_path):
         os.rmdir(tmp_datasets_path)
+
+
+def main():
+    if args.batch_run:
+        batch_run()
+
+    else:
+        normal_run()
 
 
 if __name__ == '__main__':
