@@ -1,15 +1,24 @@
+import argparse
 import multiprocessing
 import os
 import json
 import pickle
 from concurrent import futures
 from concurrent.futures import ProcessPoolExecutor
+from copy import deepcopy
 
 from ists.dataset.read import load_data
 from ists.preparation import prepare_data, prepare_train_test, filter_data
 from ists.preparation import define_feature_mask, get_list_null_max_size
 from ists.preprocessing import get_time_max_sizes
 from ists.spatial import prepare_exogenous_data, prepare_spatial_data
+
+parser = argparse.ArgumentParser('FDB Dataset Generator')
+
+parser.add_argument('--config', type=str, nargs='+', default='all',
+                    help="Select different configs to generate the datasets.")
+
+args = parser.parse_args()
 
 
 def data_step(path_params: dict, prep_params: dict, eval_params: dict, keep_nan: bool = False,
@@ -183,6 +192,9 @@ def main():
 
     with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
         for conf_file, dataset_folder in conf_files.items():
+            if conf_file not in args.config:
+                continue
+
             with open(conf_file, 'r') as f:
                 conf = json.load(f)
 
@@ -208,7 +220,9 @@ def main():
                         futures_ = list()
                         dataset_complete_path = os.path.join(dataset_folder, dataset_name)
                         futures_.append(executor.submit(data_step,
-                                                        path_params, prep_params, eval_params,
+                                                        deepcopy(path_params),
+                                                        deepcopy(prep_params),
+                                                        deepcopy(eval_params),
                                                         **{'keep_nan': False,
                                                            'dataset_save_path': dataset_complete_path
                                                            }))
