@@ -145,8 +145,6 @@ def main():
 
         max_workers = len(devices) if models != ['GRU-D'] else multiprocessing.cpu_count() // 4
 
-        print("Devices: ", devices, "\nMax workers: ", max_workers)
-
         # TODO: it appears that the number of processes able to run is somehow limited by the Manager. Having
         #  max_workers > len(devices) still causes the program to run with at most len(devices) processes.
         with futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
