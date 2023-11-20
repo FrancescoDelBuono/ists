@@ -13,8 +13,10 @@ parser.add_argument('-m', '--model', type=str, nargs='+',
                     help="List of models to train and test separated by spaces.", default=['GRU-D', 'CRU', 'mTAN'])
 parser.add_argument('-d', '--datasets_path', type=str, required=True, nargs='+',
                     help="Folder containing pickle datasets or a (list of) path(s) to a pickle dataset.")
-parser.add_argument('--device', nargs='+', default='cuda:0',
+parser.add_argument('--device', nargs='+', default='cuda:0' if torch.cuda.is_available() else 'cpu',
                     type=str, help='Device to use for training and testing.')
+parser.add_argument('--num_workers', type=str, default=None,
+                    help='Number of workers to use for parallelizing models.')
 
 hostname = socket.gethostname()
 
@@ -138,12 +140,19 @@ def main():
         raise ValueError('No datasets found.')
 
     with multiprocessing.Manager() as manager:
-        if args.device == ['all']:
-            devices = manager.dict({f'cuda:{idx}': manager.Lock() for idx in range(torch.cuda.device_count())})
-        else:
-            devices = manager.dict({cuda_dev: manager.Lock() for cuda_dev in args.device})
+        if not args.num_workers:
+            if args.device == ['all']:
+                devices = manager.dict({f'cuda:{idx}': manager.Lock() for idx in range(torch.cuda.device_count())})
+            else:
+                devices = manager.dict({cuda_dev: manager.Lock() for cuda_dev in args.device})
 
-        max_workers = len(devices) if models != ['GRU-D'] else multiprocessing.cpu_count() // 4
+            max_workers = len(devices) if models != ['GRU-D'] else multiprocessing.cpu_count() // 4
+
+        else:
+            if args.num_workers == 'auto' or args.device == ['cpu']:
+                max_workers = multiprocessing.cpu_count() // 4
+            else:
+                max_workers = int(args.num_workers)
 
         # TODO: it appears that the number of processes able to run is somehow limited by the Manager. Having
         #  max_workers > len(devices) still causes the program to run with at most len(devices) processes.
