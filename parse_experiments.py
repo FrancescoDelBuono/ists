@@ -27,7 +27,7 @@ parser.add_argument('--merge', action='store_true', default=False,
 parser.add_argument('--fill_old', action='store_true', default=False,
                     help="Fill the table with old results first, then add the new ones.")
 
-parser.add_argument('--parse_ablation', action='store_true', default=False,
+parser.add_argument('--ablation', action='store_true', default=False,
                     help="Parse the ablation experiments results.")
 
 parser.add_argument('--debug_model', type=str, default=None, nargs='+',
@@ -49,20 +49,30 @@ file_start = {
     'ISTS': 'ists_output_'
 }
 
-models = ['ISTS', 'GRU-D', 'CRU', 'mTAN']
+models = ['t', 's', 'e', 'ts', 'te', 'se'] if args.ablation else ['ISTS', 'GRU-D', 'CRU', 'mTAN']
 
-df_dict = {model: pd.DataFrame() for model in args.models}
+if args.ablation:
+    df_dict = {model: pd.DataFrame() for model in models}
+else:
+    df_dict = {model: pd.DataFrame() for model in args.models}
+
 loss_df = pd.DataFrame()
 
 
 def parse_ists(file):
     global loss_df, df_dict
-    df = df_dict['ISTS']
+
+    if not args.ablation:
+        df = df_dict['ISTS']
+    else:
+        df = None
+
     custom_nan = -999.0
 
-    if df.empty:
-        for column in [f'{mode}_{metric}' for mode in ['Train', 'Test'] for metric in ['R2', 'MSE', 'MAE']]:
-            df[column] = custom_nan
+    if not args.ablation:
+        if df.empty:
+            for column in [f'{mode}_{metric}' for mode in ['Train', 'Test'] for metric in ['R2', 'MSE', 'MAE']]:
+                df[column] = custom_nan
 
     if loss_df.empty:
         for column in [f'{mode}_{metric}' for mode in ['Loss', 'Val_Loss'] for metric in range(20)]:
@@ -86,7 +96,14 @@ def parse_ists(file):
         elif 'subset' in info:
             subset = info.split('=')[-1].split('.csv')[0].split('subset_agg_')[-1]
         elif 'model_type' in info:
-            model_type = info.split('=')[-1]
+            model_type = info.split('=')[-1].strip()
+
+    if args.ablation:
+        df = df_dict[model_type]
+
+        if df.empty:
+            for column in [f'{mode}_{metric}' for mode in ['Train', 'Test'] for metric in ['R2', 'MSE', 'MAE']]:
+                df[column] = custom_nan
 
     with open(file, 'r') as log_file:
         idx_string = f"{dataset_name}_{subset}_nan{nan_num}_nf{num_fut}_{model_type}"
@@ -111,8 +128,11 @@ def parse_ists(file):
                     except ValueError:
                         loss_df.loc[idx_string, [f'Loss_{epoch}', f'Val_Loss_{epoch}']] = [np.nan, np.nan]
 
-    # maybe superfluous
-    df_dict['ISTS'] = df
+    if args.ablation:
+        df_dict[model_type] = df
+    else:
+        # maybe superfluous
+        df_dict['ISTS'] = df
 
 
 def parse_model(model, file):
@@ -459,7 +479,7 @@ def parse_model(model, file):
 
 
 def main():
-    # models = ['ISTS', 'GRU-D', 'mTAN', 'CRU']
+    global models
 
     if args.fill_old:
         parse_logs('./backup_logs')
@@ -467,14 +487,23 @@ def main():
     parse_logs(args.folder)
 
     if args.paper_table:
-        columns = pd.MultiIndex.from_tuples([(model, nan_num) for nan_num in [0.0, 0.2, 0.5, 0.8] for model in models],
+        nan_nums = [0.0, 0.2, 0.5, 0.8]
+        num_futs = [7, 14, 30, 60]
+
+        columns = pd.MultiIndex.from_tuples([(model, nan_num) for nan_num in nan_nums for model in models],
                                             names=['model', 'nan_num'])
-        complete_dfs = {num_fut: pd.DataFrame(columns=columns) for num_fut in [7, 14, 30, 60]}
+
+        complete_dfs = {num_fut: pd.DataFrame(columns=columns) for num_fut in num_futs}
         for num_fut, complete_df in complete_dfs.items():
             complete_df.rename_axis(index='Dataset', inplace=True)
             # example: french_subset_agg_th1_1_0.2_nf14_sttransformer
             for model, df in df_dict.items():
-                subset_df = df.loc[df.index.str.contains(f'nf{num_fut}')]
+                try:
+                    subset_df = df.loc[df.index.str.contains(f'nf{num_fut}')]
+                except AttributeError as ae:
+                    print(model, df, sep='\n')
+                    raise ae
+
                 parameters = subset_df.index.to_series().apply(lambda dataset_: dataset_.split('_'))
                 subset_idx = -1
                 nan_idx = -1
@@ -494,26 +523,36 @@ def main():
 
                     complete_df.loc[f"{dataset}_{subset}",
                                     (model, nan_num)] = subset_df.loc[original_dataset_name, args.metric]
-            complete_df: pd.DataFrame
+
             complete_df.sort_index(inplace=True)
             # complete_df.sort_index(axis=1, level=['model', 'nan_num'], ascending=[True, True], inplace=True)
             # force order of columns
-            complete_df = complete_df.loc[:, [('ISTS', 0.0), ('ISTS', 0.2), ('ISTS', 0.5), ('ISTS', 0.8),
-                                              ('GRU-D', 0.0), ('GRU-D', 0.2), ('GRU-D', 0.5), ('GRU-D', 0.8),
-                                              ('mTAN', 0.0), ('mTAN', 0.2), ('mTAN', 0.5), ('mTAN', 0.8),
-                                              ('CRU', 0.0), ('CRU', 0.2), ('CRU', 0.5), ('CRU', 0.8)]]
+            if args.ablation:
+                complete_df = complete_df.loc[:, [('t', 0.0), ('t', 0.2), ('t', 0.5), ('t', 0.8),
+                                                  ('s', 0.0), ('s', 0.2), ('s', 0.5), ('s', 0.8),
+                                                  ('e', 0.0), ('e', 0.2), ('e', 0.5), ('e', 0.8),
+                                                  ('ts', 0.0), ('ts', 0.2), ('ts', 0.5), ('ts', 0.8),
+                                                  ('te', 0.0), ('te', 0.2), ('te', 0.5), ('te', 0.8),
+                                                  ('se', 0.0), ('se', 0.2), ('se', 0.5), ('se', 0.8)]]
+            else:
+                complete_df = complete_df.loc[:, [('ISTS', 0.0), ('ISTS', 0.2), ('ISTS', 0.5), ('ISTS', 0.8),
+                                                  ('GRU-D', 0.0), ('GRU-D', 0.2), ('GRU-D', 0.5), ('GRU-D', 0.8),
+                                                  ('mTAN', 0.0), ('mTAN', 0.2), ('mTAN', 0.5), ('mTAN', 0.8),
+                                                  ('CRU', 0.0), ('CRU', 0.2), ('CRU', 0.5), ('CRU', 0.8)]]
 
-            complete_filename = f'complete_results_{"old_filled_" if args.fill_old else ""}nf{num_fut}_{args.metric}.csv'
+            complete_filename = (f'{"ablation" if args.ablation else "complete"}'
+                                 f'_results_{"old_filled_" if args.fill_old else ""}'
+                                 f'nf{num_fut}_{args.metric}.csv')
             complete_df.to_csv(complete_filename)
 
     else:
         for model, df in df_dict.items():
             df.rename_axis(index='Dataset', inplace=True)
-            df.to_csv(f'{model}_results.csv')
+            df.to_csv(f'{model}_{"ablation_" if args.ablation else ""}results.csv')
 
     if not loss_df.empty:
         loss_df.rename_axis(index='Dataset', inplace=True)
-        loss_df.to_csv('ists_losses.csv')
+        loss_df.to_csv(f'ists_{"ablation_" if args.ablation else ""}losses.csv')
 
 
 def parse_logs(folder: str):
@@ -523,7 +562,8 @@ def parse_logs(folder: str):
             print(f"Moving to {folder}.")
             os.chdir(folder)
 
-        if wdir.split('/')[-1] != folders[model]:  # if I'm not in a model folder already
+        # if I'm not in a model folder already
+        if wdir.split('/')[-1] != folders[model] and os.path.exists(f'./{folders[model]}'):
             print(f"Parsing files in {folders[model]}.")
             os.chdir(folders[model])
         else:
@@ -536,7 +576,7 @@ def parse_logs(folder: str):
             if file.startswith(file_start[model]):
                 print(f'Parsing {file}...')
 
-                if model == 'ISTS':
+                if model == 'ISTS' or args.ablation:
                     parse_ists(file)
 
                 else:
@@ -550,39 +590,40 @@ def merge():
     old_filled_files = [file for file in os.listdir() if 'old_filled' in file and file.endswith('.csv')]
     for csv_file in [file for file in os.listdir(ists_results_path) if file.endswith('.csv')]:
         ists_results = pd.read_csv(os.path.join(ists_results_path, csv_file), index_col=0, header=[0, 1])
-        others_results = pd.read_csv(csv_file, index_col=0, header=[0, 1])
 
-        others_results.loc[:, ('ISTS', '0.0')] = ists_results.loc[:, ('ISTS', '0.0')]
-        others_results.loc[:, ('ISTS', '0.2')] = ists_results.loc[:, ('ISTS', '0.2')]
-        others_results.loc[:, ('ISTS', '0.5')] = ists_results.loc[:, ('ISTS', '0.5')]
-        others_results.loc[:, ('ISTS', '0.8')] = ists_results.loc[:, ('ISTS', '0.8')]
+        if args.ablation:
+            ablation_results = pd.read_csv(csv_file.replace('complete', 'ablation'),
+                                           index_col=0, header=[0, 1])
 
-        others_results.to_csv(csv_file)
+            for idx, nan_num in enumerate(('0.0', '0.2', '0.5', '0.8')):
+                ablation_results.insert(idx, ('sttransformer', nan_num), ists_results.loc[:, ('ISTS', nan_num)])
 
-        if old_filled_files:
-            for file in old_filled_files:
-                if ''.join(file.split('_old_filled')) == csv_file:
-                    print(f"Merging with old_filled results {file}.")
-                    old_filled_results = pd.read_csv(file, index_col=0, header=[0, 1])
+            ablation_results.to_csv(csv_file.replace('complete', 'ablation'))
 
-                    old_filled_results.loc[:, ('ISTS', '0.0')] = ists_results.loc[:, ('ISTS', '0.0')]
-                    old_filled_results.loc[:, ('ISTS', '0.2')] = ists_results.loc[:, ('ISTS', '0.2')]
-                    old_filled_results.loc[:, ('ISTS', '0.5')] = ists_results.loc[:, ('ISTS', '0.5')]
-                    old_filled_results.loc[:, ('ISTS', '0.8')] = ists_results.loc[:, ('ISTS', '0.8')]
+        else:
+            others_results = pd.read_csv(csv_file, index_col=0, header=[0, 1])
 
-                    old_filled_results.to_csv(file)
+            for nan_num in ('0.0', '0.2', '0.5', '0.8'):
+                others_results.loc[:, ('ISTS', nan_num)] = ists_results.loc[:, ('ISTS', nan_num)]
 
-                    break
+            others_results.to_csv(csv_file)
 
+            if old_filled_files:
+                for file in old_filled_files:
+                    if ''.join(file.split('_old_filled')) == csv_file:
+                        print(f"Merging with old_filled results {file}.")
+                        old_filled_results = pd.read_csv(file, index_col=0, header=[0, 1])
 
-def parse_ablation():
-    pass
+                        for nan_num in ('0.0', '0.2', '0.5', '0.8'):
+                            old_filled_results.loc[:, ('ISTS', nan_num)] = ists_results.loc[:, ('ISTS', nan_num)]
+
+                        old_filled_results.to_csv(file)
+
+                        break
 
 
 if __name__ == '__main__':
     if args.merge:
         merge()
-    elif args.parse_ablation:
-        parse_ablation()
     else:
         main()
