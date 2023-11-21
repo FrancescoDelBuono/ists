@@ -498,11 +498,7 @@ def main():
             complete_df.rename_axis(index='Dataset', inplace=True)
             # example: french_subset_agg_th1_1_0.2_nf14_sttransformer
             for model, df in df_dict.items():
-                try:
-                    subset_df = df.loc[df.index.str.contains(f'nf{num_fut}')]
-                except AttributeError as ae:
-                    print(model, df, sep='\n')
-                    raise ae
+                subset_df = df.loc[df.index.str.contains(f'nf{num_fut}')]
 
                 parameters = subset_df.index.to_series().apply(lambda dataset_: dataset_.split('_'))
                 subset_idx = -1
