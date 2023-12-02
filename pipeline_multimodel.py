@@ -2,6 +2,7 @@ import os
 import json
 import argparse
 import pickle
+from datetime import datetime
 
 from ists.dataset.read import load_data
 from ists.preparation import prepare_data, prepare_train_test, filter_data
@@ -41,6 +42,9 @@ parser.add_argument('--batch_run', action='store_true', default=False,
 parser.add_argument('--dataset_folder', type=str, default=None,
                     help='folder containing the datasets for batch run.')
 
+parser.add_argument('--recycle_gpu', action='store_true', default=False,
+                    help='Use the same GPU for multiple processes, exploiting the available VRAM.')
+
 args = parser.parse_args()
 
 """config_datasets_map = {
@@ -51,7 +55,7 @@ args = parser.parse_args()
 }"""
 
 
-def parse_params():
+def parse_params(config_file: str = None):
     """ Parse input parameters. """
 
     if args.device[0] != 'cpu':
@@ -60,10 +64,12 @@ def parse_params():
         selected_gpus = [gpu for i, gpu in enumerate(gpus) if i in gpus_idx]
         tf.config.set_visible_devices(selected_gpus, 'GPU')
 
-    conf_file = args.file
-    assert os.path.exists(conf_file), 'Configuration file does not exist'
+    if config_file is None:
+        config_file = args.file
 
-    with open(conf_file, 'r') as f:
+    assert os.path.exists(config_file), 'Configuration file does not exist'
+
+    with open(config_file, 'r') as f:
         conf = json.load(f)
 
     return conf['path_params'], conf['prep_params'], conf['eval_params'], conf['model_params']
@@ -352,12 +358,44 @@ def batch_run():
     models = args.model
     dataset_folder = args.dataset_folder
 
-    command = (f'python3 launch_experiments.py --model {" ".join(models)} --dataset '
-               f'{os.path.abspath(dataset_folder)} --device all')
+    if args.model == ['ISTS']:
+        for dataset in dataset_folder.listdir():
+            print(f"Dataset: {dataset}")
 
-    print(command)
+            if dataset.startswith('ushcn'):
+                _, _, _, model_params = parse_params('config/params_ushcn.json')
+            elif dataset.startswith('french'):
+                _, _, _, model_params = parse_params('config/params_french.json')
+            else:
+                raise ValueError('Unsupported dataset.')
 
-    os.system(command)
+            checkpoint_dir = f'./output_{dataset.split(".pickle")[0]}'
+
+            with open(os.path.join(os.getcwd(), dataset_folder, dataset), 'rb') as dataset_file:
+                train_test_dict = pickle.load(dataset_file)
+
+            model_step(train_test_dict, model_params, checkpoint_dir)
+
+    else:
+        if args.device == ['all']:
+            devices = 'all'
+
+        elif isinstance(args.device, list) and len(args.device) > 1:
+            devices = ' '.join(args.device)
+
+        else:
+            devices = args.device[0]
+
+        command = (f'python3 launch_experiments.py --model {" ".join(models)} --dataset '
+                   f'{os.path.abspath(dataset_folder)} '
+                   f'--device {devices} '
+                   f'{"--recycle_gpu" if args.recycle_gpu else ""}')
+
+        print(command)
+
+        os.system(command)
+
+    print("Batch run ended.")
 
 
 def normal_run():
@@ -410,7 +448,11 @@ def normal_run():
                         for model_type in args.model_type:
                             model_params['model_type'] = model_type
                             checkpoint_dir = f'./output_{dataset_name}_{subset}_{nan_num}_{num_fut}_{model_type}'
-                            print(model_step(train_test_dict, model_params, checkpoint_dir))
+                            start_time = datetime.now()
+                            results = model_step(train_test_dict, model_params, checkpoint_dir)
+                            end_time = datetime.now()
+                            print('Duration: {}'.format(end_time - start_time))
+                            print(results)
 
                     else:  # CRU, mTAN, GRU-D
                         train_test_dict = data_step(path_params, prep_params, eval_params,
