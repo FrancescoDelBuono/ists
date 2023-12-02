@@ -28,6 +28,17 @@ def data_step(path_params: dict, prep_params: dict, eval_params: dict, keep_nan:
     spt_params = prep_params['spt_params']
     exg_params = prep_params['exg_params']
 
+    features = {
+        'baseline': {
+            'french': 3,
+            'ushcn': 5,
+        },
+        'ists': {
+            'french': 1,
+            'ushcn': 1
+        }
+    }
+
     # Load dataset
     ts_dict, exg_dict, spt_dict = load_data(
         ts_filename=path_params['ts_filename'],
@@ -146,6 +157,18 @@ def data_step(path_params: dict, prep_params: dict, eval_params: dict, keep_nan:
     res['time_max_sizes'] = x_time_max_sizes
     res['exg_time_max_sizes'] = exg_time_max_sizes
 
+    print(f"About to save dataset {dataset_save_path}. Config reports {len(ts_params['features'])} features.")
+
+    if 'baseline' in dataset_save_path:
+        if len(ts_params['features']) != features['baseline']['ushcn' if 'ushcn' in dataset_save_path else 'french']:
+            raise RuntimeError(f"Wrong number of features for dataset {dataset_save_path}: "
+                               f"config has {len(ts_params['features'])} features. ")
+
+    else:
+        if len(ts_params['features']) != features['ists']['ushcn' if 'ushcn' in dataset_save_path else 'french']:
+            raise RuntimeError(f"Wrong number of features for dataset {dataset_save_path}: "
+                               f"config has {len(ts_params['features'])} features. ")
+
     if dataset_save_path:
         with open(dataset_save_path, "wb") as f:
             pickle.dump(res, f)
@@ -190,16 +213,22 @@ def main():
     for folder_path in conf_files.values():
         os.makedirs(folder_path, exist_ok=True)
 
-    with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+    with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count() // 2) as executor:
         for conf_file, dataset_folder in conf_files.items():
-            if conf_file not in args.config:
-                continue
+            if args.config != 'all':
+                if conf_file not in args.config:
+                    continue
 
             with open(conf_file, 'r') as f:
                 conf = json.load(f)
 
             path_params, prep_params, eval_params, _ = conf['path_params'], conf['prep_params'], conf[
                 'eval_params'], conf['model_params']
+
+            keep_nan = True if 'baseline' in conf_file else False
+
+            print("Preparing datasets for config file:", conf_file)
+            print("Keep nan:", keep_nan)
 
             for nan_num in nan_nums:
                 for subset in subsets:
@@ -223,7 +252,7 @@ def main():
                                                         deepcopy(path_params),
                                                         deepcopy(prep_params),
                                                         deepcopy(eval_params),
-                                                        **{'keep_nan': False,
+                                                        **{'keep_nan': keep_nan,
                                                            'dataset_save_path': dataset_complete_path
                                                            }))
 
