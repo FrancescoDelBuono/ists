@@ -4,7 +4,7 @@ import os
 import socket
 from concurrent import futures
 from time import sleep
-
+from pynvml import nvmlInit, nvmlDeviceGetMemoryInfo, nvmlDeviceGetHandleByIndex
 import torch
 
 parser = argparse.ArgumentParser('FDB')
@@ -17,6 +17,8 @@ parser.add_argument('--device', nargs='+', default='cuda:0' if torch.cuda.is_ava
                     type=str, help='Device to use for training and testing.')
 parser.add_argument('--num_workers', type=str, default=None,
                     help='Number of workers to use for parallelizing models.')
+parser.add_argument('--recycle_gpu', action='store_true', default=False,
+                    help="Run multiple models on the same GPU to exploit the available VRAM.")
 
 hostname = socket.gethostname()
 
@@ -56,10 +58,17 @@ parameters = {
             '--filename {} --device {} --normalize_tp 2>&1 | tee mtan_output_{}.txt'
 }
 
+vram_usage = {
+    'GRU-D': 0,
+    'CRU': 3221225472,  # 3 GB in Bytes (CRU uses 3 GB of VRAM)
+    'mTAN': 40802189312  # 38 GB in Bytes (mTAN uses 38 GB of VRAM)
+}
+
 args = parser.parse_args()
 
 
-def launch_model(model, dataset, device_list):
+def launch_model(model: str, dataset: str, device_list: dict[str: multiprocessing.Lock],
+                 recycle_gpu: bool = False):
     device = 'cpu'
     acquired_lock = None
 
@@ -75,12 +84,25 @@ def launch_model(model, dataset, device_list):
 
     if model != 'GRUD-D':  # GRU-D must run on CPU because of tensorflow compatibility problems with CUDA
         while True:
-            for dev, lock in device_list.items():
-                if lock.acquire(blocking=False):
-                    print(f'{os.getpid()}: Acquired lock for {dev}')
-                    acquired_lock = lock
-                    device = dev
-                    break
+            if recycle_gpu:
+                for dev, locks in device_list.items():
+                    if acquired_lock is not None:
+                        break
+
+                    for lock in locks:
+                        if lock.acquire(blocking=False):
+                            print(f'{os.getpid()}: Acquired lock for {dev}')
+                            acquired_lock = lock
+                            device = dev
+                            break
+
+            else:
+                for dev, lock in device_list.items():
+                    if lock.acquire(blocking=False):
+                        print(f'{os.getpid()}: Acquired lock for {dev}')
+                        acquired_lock = lock
+                        device = dev
+                        break
 
             if acquired_lock:
                 break
@@ -93,6 +115,7 @@ def launch_model(model, dataset, device_list):
     wdir = wdirs[model]
     os.chdir(wdir)
     script = scripts[model]
+
     if model == 'GRU-D':
         cmd_parameters = parameters[model].format(dataset, dataset_name)
     elif model == 'CRU':
@@ -142,17 +165,66 @@ def main():
     with multiprocessing.Manager() as manager:
         if not args.num_workers:
             if args.device == ['all']:
-                devices = manager.dict({f'cuda:{idx}': manager.Lock() for idx in range(torch.cuda.device_count())})
+                if models == ['GRU-D']:
+                    if multiprocessing.cpu_count() >= 128:
+                        max_workers = multiprocessing.cpu_count() // 16
+                    else:
+                        max_workers = multiprocessing.cpu_count() // 4
+
+                    devices = manager.dict({f'cpu:{idx}': manager.Lock() for idx in range(max_workers)})
+
+                else:
+                    devices = manager.dict({f'cuda:{idx}': manager.Lock() for idx in range(torch.cuda.device_count())})
+
+            elif args.recycle_gpu:
+                if len(models) > 1:
+                    raise RuntimeError('Cannot recycle GPUs when training different models at once.')
+
+                # total_gpu_mem = torch.cuda.get_device_properties(0).total_memory
+                device_idx = int(args.device[0].split(':')[-1])
+                nvmlInit()
+                info = nvmlDeviceGetMemoryInfo(nvmlDeviceGetHandleByIndex(device_idx))
+                free_gpu_mem = info.free
+                # runnable_models = total_gpu_mem // vram_usage[models[0]]
+                runnable_models = free_gpu_mem // vram_usage[models[0]]
+
+                devices = manager.dict()
+
+                for cuda_dev in args.device:
+                    locks = manager.list()
+                    for _ in range(runnable_models):
+                        locks.append(manager.Lock())
+
+                    devices[cuda_dev] = locks
+                    # devices = manager.dict({cuda_dev: [manager.Lock()] * runnable_models
+                    #                         for cuda_dev in args.device})
+
+                max_workers = len(devices) * runnable_models if models != ['GRU-D'] \
+                    else multiprocessing.cpu_count() // 4
+
             else:
                 devices = manager.dict({cuda_dev: manager.Lock() for cuda_dev in args.device})
 
-            max_workers = len(devices) if models != ['GRU-D'] else multiprocessing.cpu_count() // 4
+            if not args.recycle_gpu:
+                if models != ['GRU-D']:
+                    max_workers = len(devices)
+                else:
+                    if multiprocessing.cpu_count() >= 128:
+                        max_workers = multiprocessing.cpu_count() // 16
+                    else:
+                        max_workers = multiprocessing.cpu_count() // 4
 
         else:
-            if args.num_workers == 'auto' or args.device == ['cpu']:
-                max_workers = multiprocessing.cpu_count() // 4
+            if args.num_workers == 'auto' and args.device == ['cpu']:
+                if multiprocessing.cpu_count() >= 128:
+                    max_workers = multiprocessing.cpu_count() // 16
+                else:
+                    max_workers = multiprocessing.cpu_count() // 4
+
             else:
                 max_workers = int(args.num_workers)
+
+            devices = manager.dict({cpu_core: manager.Lock()} for cpu_core in range(max_workers))
 
         # TODO: it appears that the number of processes able to run is somehow limited by the Manager. Having
         #  max_workers > len(devices) still causes the program to run with at most len(devices) processes.
@@ -161,9 +233,9 @@ def main():
                 for model in models:
                     futures_ = list()
 
-                    futures_.append(executor.submit(launch_model, model, dataset, devices))
+                    futures_.append(executor.submit(launch_model, model, dataset, devices, args.recycle_gpu))
 
-            done, not_done = futures.wait(futures_, return_when=futures.FIRST_EXCEPTION)
+            done, not_done = futures.wait(futures_, return_when=futures.ALL_COMPLETED)
 
             futures_exceptions = [future.exception() for future in done]
             failed_futures = sum(map(lambda exception_: True if exception_ is not None else False,
