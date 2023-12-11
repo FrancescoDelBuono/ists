@@ -197,7 +197,7 @@ def parse_model(model, file):
                                     print("DEBUG: dataset_name in df.index:", dataset_name in df.index)
                                 if dataset_name not in df.index:
                                     df.loc[dataset_name,
-                                           [f'Train_{metric}', f'Valid_{metric}', f'Test_{metric}']] = metrics
+                                    [f'Train_{metric}', f'Valid_{metric}', f'Test_{metric}']] = metrics
                                 else:
                                     if metric == 'R2':
                                         get_best = max
@@ -207,29 +207,29 @@ def parse_model(model, file):
                                     saved_train_metric = df.loc[dataset_name, f'Train_{metric}']
                                     if saved_train_metric != custom_nan and not np.isnan(saved_train_metric):
                                         df.loc[dataset_name,
-                                               f'Train_{metric}'] = get_best(metrics[0],
-                                                                             df.loc[dataset_name, f'Train_{metric}'])
+                                        f'Train_{metric}'] = get_best(metrics[0],
+                                                                      df.loc[dataset_name, f'Train_{metric}'])
                                     else:
                                         df.loc[dataset_name,
-                                               f'Train_{metric}'] = metrics[0]
+                                        f'Train_{metric}'] = metrics[0]
 
                                     saved_valid_metric = df.loc[dataset_name, f'Valid_{metric}']
                                     if saved_valid_metric != custom_nan and not np.isnan(saved_valid_metric):
                                         df.loc[dataset_name,
-                                               f'Valid_{metric}'] = get_best(metrics[1],
-                                                                             df.loc[dataset_name, f'Valid_{metric}'])
+                                        f'Valid_{metric}'] = get_best(metrics[1],
+                                                                      df.loc[dataset_name, f'Valid_{metric}'])
                                     else:
                                         df.loc[dataset_name,
-                                               f'Valid_{metric}'] = metrics[1]
+                                        f'Valid_{metric}'] = metrics[1]
 
                                     saved_test_metric = df.loc[dataset_name, f'Test_{metric}']
                                     if saved_test_metric != custom_nan and not np.isnan(saved_test_metric):
                                         df.loc[dataset_name,
-                                               f'Test_{metric}'] = get_best(metrics[2],
-                                                                            df.loc[dataset_name, f'Test_{metric}'])
+                                        f'Test_{metric}'] = get_best(metrics[2],
+                                                                     df.loc[dataset_name, f'Test_{metric}'])
                                     else:
                                         df.loc[dataset_name,
-                                               f'Test_{metric}'] = metrics[2]
+                                        f'Test_{metric}'] = metrics[2]
                             else:
                                 raise ValueError(f'Could not parse {file}: unknown metric format.')
 
@@ -267,7 +267,7 @@ def parse_model(model, file):
 
                             if dataset_name not in df.index:
                                 df.loc[dataset_name,
-                                       [f'Train_{metric}', f'Valid_{metric}']] = train_valid
+                                [f'Train_{metric}', f'Valid_{metric}']] = train_valid
                                 df.loc[dataset_name, f'Test_{metric}'] = test
                             else:
                                 if metric == 'R2':
@@ -278,29 +278,29 @@ def parse_model(model, file):
                                 saved_train_metric = df.loc[dataset_name, f'Train_{metric}']
                                 if saved_train_metric != custom_nan and not np.isnan(saved_train_metric):
                                     df.loc[dataset_name,
-                                           f'Train_{metric}'] = get_best(train_valid,
-                                                                         df.loc[dataset_name, f'Train_{metric}'])
+                                    f'Train_{metric}'] = get_best(train_valid,
+                                                                  df.loc[dataset_name, f'Train_{metric}'])
                                 else:
                                     df.loc[dataset_name,
-                                           f'Train_{metric}'] = train_valid
+                                    f'Train_{metric}'] = train_valid
 
                                 saved_valid_metric = df.loc[dataset_name, f'Valid_{metric}']
                                 if saved_valid_metric != custom_nan and not np.isnan(saved_valid_metric):
                                     df.loc[dataset_name,
-                                           f'Valid_{metric}'] = get_best(train_valid,
-                                                                         df.loc[dataset_name, f'Valid_{metric}'])
+                                    f'Valid_{metric}'] = get_best(train_valid,
+                                                                  df.loc[dataset_name, f'Valid_{metric}'])
                                 else:
                                     df.loc[dataset_name,
-                                           f'Valid_{metric}'] = train_valid
+                                    f'Valid_{metric}'] = train_valid
 
                                 saved_test_metric = df.loc[dataset_name, f'Test_{metric}']
                                 if saved_test_metric != custom_nan and not np.isnan(saved_test_metric):
                                     df.loc[dataset_name,
-                                           f'Test_{metric}'] = get_best(test,
-                                                                        df.loc[dataset_name, f'Test_{metric}'])
+                                    f'Test_{metric}'] = get_best(test,
+                                                                 df.loc[dataset_name, f'Test_{metric}'])
                                 else:
                                     df.loc[dataset_name,
-                                           f'Test_{metric}'] = test
+                                    f'Test_{metric}'] = test
 
                     else:
                         print(f"ValueError: Could not parse {file}: unknown structure.")
@@ -490,8 +490,8 @@ def main():
         nan_nums = [0.0, 0.2, 0.5, 0.8]
         num_futs = [7, 14, 30, 60]
 
-        columns = pd.MultiIndex.from_tuples([(model, nan_num) for nan_num in nan_nums for model in models],
-                                            names=['model', 'nan_num'])
+        columns = pd.MultiIndex.from_tuples([(nan_num, model) for nan_num in nan_nums for model in models],
+                                            names=['nan_num', 'model'])
 
         complete_dfs = {num_fut: pd.DataFrame(columns=columns) for num_fut in num_futs}
         for num_fut, complete_df in complete_dfs.items():
@@ -518,23 +518,23 @@ def main():
                     nan_num = float(dataset_params[nan_idx].split('nan')[-1]) / 10
 
                     complete_df.loc[f"{dataset}_{subset}",
-                                    (model, nan_num)] = subset_df.loc[original_dataset_name, args.metric]
+                    (nan_num, model)] = subset_df.loc[original_dataset_name, args.metric]
 
             complete_df.sort_index(inplace=True)
             # complete_df.sort_index(axis=1, level=['model', 'nan_num'], ascending=[True, True], inplace=True)
             # force order of columns
             if args.ablation:
-                complete_df = complete_df.loc[:, [('t', 0.0), ('t', 0.2), ('t', 0.5), ('t', 0.8),
-                                                  ('s', 0.0), ('s', 0.2), ('s', 0.5), ('s', 0.8),
-                                                  ('e', 0.0), ('e', 0.2), ('e', 0.5), ('e', 0.8),
-                                                  ('ts', 0.0), ('ts', 0.2), ('ts', 0.5), ('ts', 0.8),
-                                                  ('te', 0.0), ('te', 0.2), ('te', 0.5), ('te', 0.8),
-                                                  ('se', 0.0), ('se', 0.2), ('se', 0.5), ('se', 0.8)]]
+                complete_df = complete_df.loc[:,
+                              [(0.0, 't'), (0.0, 's'), (0.0, 'e'), (0.0, 'ts'), (0.0, 'te'), (0.0, 'se'),
+                               (0.2, 't'), (0.2, 's'), (0.2, 'e'), (0.2, 'ts'), (0.2, 'te'), (0.2, 'se'),
+                               (0.5, 't'), (0.5, 's'), (0.5, 'e'), (0.5, 'ts'), (0.5, 'te'), (0.5, 'se'),
+                               (0.8, 't'), (0.8, 's'), (0.8, 'e'), (0.8, 'ts'), (0.8, 'te'), (0.8, 'se')]]
+
             else:
-                complete_df = complete_df.loc[:, [('ISTS', 0.0), ('ISTS', 0.2), ('ISTS', 0.5), ('ISTS', 0.8),
-                                                  ('GRU-D', 0.0), ('GRU-D', 0.2), ('GRU-D', 0.5), ('GRU-D', 0.8),
-                                                  ('mTAN', 0.0), ('mTAN', 0.2), ('mTAN', 0.5), ('mTAN', 0.8),
-                                                  ('CRU', 0.0), ('CRU', 0.2), ('CRU', 0.5), ('CRU', 0.8)]]
+                complete_df = complete_df.loc[:, [(0.0, 'ISTS'), (0.0, 'GRU-D'), (0.0, 'mTAN'), (0.0, 'CRU'),
+                                                  (0.2, 'ISTS'), (0.2, 'GRU-D'), (0.2, 'mTAN'), (0.2, 'CRU'),
+                                                  (0.5, 'ISTS'), (0.5, 'GRU-D'), (0.5, 'mTAN'), (0.5, 'CRU'),
+                                                  (0.8, 'ISTS'), (0.8, 'GRU-D'), (0.8, 'mTAN'), (0.8, 'CRU')]]
 
             complete_filename = (f'{"ablation" if args.ablation else "complete"}'
                                  f'_results_{"old_filled_" if args.fill_old else ""}'
@@ -592,7 +592,7 @@ def merge():
                                            index_col=0, header=[0, 1])
 
             for idx, nan_num in enumerate(('0.0', '0.2', '0.5', '0.8')):
-                ablation_results.insert(idx, ('sttransformer', nan_num), ists_results.loc[:, ('ISTS', nan_num)])
+                ablation_results.insert(idx, (nan_num, 'sttransformer'), ists_results.loc[:, (nan_num, 'ISTS')])
 
             ablation_results.to_csv(csv_file.replace('complete', 'ablation'))
 
@@ -600,7 +600,7 @@ def merge():
             others_results = pd.read_csv(csv_file, index_col=0, header=[0, 1])
 
             for nan_num in ('0.0', '0.2', '0.5', '0.8'):
-                others_results.loc[:, ('ISTS', nan_num)] = ists_results.loc[:, ('ISTS', nan_num)]
+                others_results.loc[:, (nan_num, 'ISTS')] = ists_results.loc[:, (nan_num, 'ISTS')]
 
             others_results.to_csv(csv_file)
 
@@ -611,7 +611,7 @@ def merge():
                         old_filled_results = pd.read_csv(file, index_col=0, header=[0, 1])
 
                         for nan_num in ('0.0', '0.2', '0.5', '0.8'):
-                            old_filled_results.loc[:, ('ISTS', nan_num)] = ists_results.loc[:, ('ISTS', nan_num)]
+                            old_filled_results.loc[:, (nan_num, 'ISTS')] = ists_results.loc[:, (nan_num, 'ISTS')]
 
                         old_filled_results.to_csv(file)
 
