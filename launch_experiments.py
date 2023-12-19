@@ -136,7 +136,59 @@ def launch_model(model: str, dataset: str, device_list: dict[str: multiprocessin
         acquired_lock.release()
 
 
+def check_launch_model(model, dataset):
+    file_start_map = {
+        'GRU-D': 'grud_output_',
+        'CRU': 'cru_output_',
+        'mTAN': 'mtan_output_'
+    }
+
+    launch = True
+
+    log_files = [file for file in os.listdir(wdirs[model]) if file.endswith('.pickle.txt')]
+
+    ran = False
+    for file in log_files:
+        if dataset.split('/')[-1] in file:
+            ran = True
+            break
+
+    if ran:
+        for file in log_files:
+            if file.startswith(file_start_map[model]):
+                if dataset.split('/')[-1] in file:
+                    with open(os.path.join(wdirs[model], file)) as dataset_file:
+                        if model == 'CRU':
+                            last_lines = dataset_file.readlines()[-4:]
+
+                            if len(last_lines) < 4:
+                                break
+                            # be completely sure that the results are structured as they should to say that the run was
+                            # successful
+                            if last_lines[0].startswith('Train R2:') and last_lines[1].startswith('Train MSE:') and \
+                                    last_lines[2].startswith('Train MAE:') and last_lines[3].startswith('Duration:'):
+                                print(f"Log file {file}, last lines:")
+                                print(last_lines)
+                                print("Skipping execution.")
+                                launch = False
+                                break
+
+                        # TODO: to implement if necessary
+                        elif model == 'GRU-D':
+                            pass
+
+                        elif model == 'mTAN':
+                            pass
+
+    if launch:
+        print(f"Execution check True for {model} on {dataset}.")
+
+    return launch
+
+
 def main():
+    batch_run = False
+
     if not args.model:
         raise RuntimeError('No models specified.')
 
@@ -149,6 +201,7 @@ def main():
         args.datasets_path = args.datasets_path[0]
 
     if os.path.isdir(args.datasets_path):
+        batch_run = True
         datasets = [os.path.join(args.datasets_path, file) for file in os.listdir(args.datasets_path)
                     if file.endswith('.pickle')]
     elif os.path.isfile(args.datasets_path):
@@ -233,7 +286,8 @@ def main():
                 for model in models:
                     futures_ = list()
 
-                    futures_.append(executor.submit(launch_model, model, dataset, devices, args.recycle_gpu))
+                    if (batch_run and check_launch_model(model, dataset)) or not batch_run:
+                        futures_.append(executor.submit(launch_model, model, dataset, devices, args.recycle_gpu))
 
             done, not_done = futures.wait(futures_, return_when=futures.ALL_COMPLETED)
 
