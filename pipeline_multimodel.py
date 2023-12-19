@@ -45,6 +45,12 @@ parser.add_argument('--dataset_folder', type=str, default=None,
 parser.add_argument('--recycle_gpu', action='store_true', default=False,
                     help='Use the same GPU for multiple processes, exploiting the available VRAM.')
 
+parser.add_argument('--keep_nan', action='store_true', default=False,
+                    help='Do not remove NaN values from the dataset for ISTS.')
+
+parser.add_argument('--keep_nan_fourth', action='store_true', default=False,
+                    help='Do not remove NaN values from the dataset for ISTS.')
+
 args = parser.parse_args()
 
 """config_datasets_map = {
@@ -53,6 +59,25 @@ args = parser.parse_args()
     'config/params_ushcn_baseline.json': 'data/pickles/ushcn_baseline',
     'config/params_french_baseline.json': 'data/pickles/french_baseline'
 }"""
+
+keep_nan_experiments_map = {
+    0: {
+        'null_feat': None,
+        'null_max_dist': 12,
+        'time_feats': []
+    },
+    1: {
+        'null_feat': 'code_bool',
+        'null_max_dist': 12,
+        'time_feats': []
+    },
+    2: {
+        'null_feat': None,
+        'null_max_dist': 12,
+        'time_feats': ['WY']
+    },
+    3: {}
+}
 
 
 def parse_params(config_file: str = None):
@@ -73,81 +98,6 @@ def parse_params(config_file: str = None):
         conf = json.load(f)
 
     return conf['path_params'], conf['prep_params'], conf['eval_params'], conf['model_params']
-
-
-def get_params():
-    # Path params (i.e. time-series path, context table path)
-    base_dir = '../../Dataset/AdbPo/Piezo/'
-    path_params = {
-        # main time-series (i.e. piezo time-series)
-        'ts_filename': os.path.join(base_dir, 'ts_all.xlsx'),
-        # table with context information (i.e. coordinates...)
-        'ctx_filename': os.path.join(base_dir, 'data_ext_all.xlsx'),
-        # dictionary of exogenous time-series (i.e. temperature...)
-        'ex_filename': os.path.join(base_dir, 'NetCDF', 'exg_w_tp_t2m.pickle')
-    }
-
-    # Preprocessing params (i.e. num past, num future, sampling frequency, features....)
-    prep_params = {
-        'ts_params': {
-            'features': ['Piezometria (m)'],
-            'label_col': 'Piezometria (m)',
-            'num_past': 48,
-            'num_fut': 6,
-            'freq': 'M',  # ['M', 'W', 'D']
-        },
-        'feat_params': {
-            # Null Encoding
-            'null_feat': 'code_lin',  # ['code_bool', 'code_lin', 'bool', 'lin', 'log']
-            'null_max_dist': 12,
-            # Time Encoding
-            'time_feats': ['M']  # ['D', 'DW', 'WY', 'M']
-        },
-        'spt_params': {
-            'num_past': 36,
-            'num_spt': 5,
-            'max_dist_th': 10000,
-            'max_null_th': 13,
-        },
-        'exg_params': {
-            'num_past': 72,
-            'features': ['tp', 't2m_min', 't2m_max', 't2m_avg'],
-            'time_feats': ['WY', 'M']
-        },
-    }
-
-    # Evaluation train and test params
-    eval_params = {
-        'train_start': '2009-01-01',
-        'test_start': '2019-01-01',
-        'label_th': 1,
-        'null_th': 13,
-    }
-
-    model_params = {
-        'transform_type': 'standard',  # None 'minmax' 'standard'
-        'model_type': 'sttransformer',  # 'sttransformer', 'dense', 'lstm', 'bilstm', 'lstm_base', 'bilstm_base'
-        'nn_params': {
-            'kernel_size': 3,
-            'd_model': 32,
-            'num_heads': 8,
-            'dff': 64,
-            'fff': 32,
-            'activation': 'relu',
-            'exg_cnn': True,
-            'spt_cnn': True,
-            'time_cnn': True,
-            'dropout_rate': 0.2,
-            'num_layers': 2,
-            'with_cross': True,
-        },
-        'lr': 0.0,
-        'loss': 'mse',
-        'batch_size': 32,
-        'epochs': 5
-    }
-
-    return path_params, prep_params, eval_params, model_params
 
 
 def change_params(path_params: dict, base_string: str, new_string: str) -> dict:
@@ -443,16 +393,39 @@ def normal_run():
 
                 try:
                     if 'ISTS' in models:
-                        train_test_dict = data_step(path_params, prep_params, eval_params,
-                                                    keep_nan=False)
-                        for model_type in args.model_type:
+                        if args.keep_nan:
+                            model_type = 'sttransformer'
                             model_params['model_type'] = model_type
-                            checkpoint_dir = f'./output_{dataset_name}_{subset}_{nan_num}_{num_fut}_{model_type}'
-                            start_time = datetime.now()
-                            results = model_step(train_test_dict, model_params, checkpoint_dir)
-                            end_time = datetime.now()
-                            print('Duration: {}'.format(end_time - start_time))
-                            print(results)
+                            for experiment in range(4):
+                                print(f"Running keep_nan experiment {experiment + 1}.")
+                                if experiment == 3 and not args.keep_nan_fourth:
+                                    print("The fourth experiment is not implemented yet.")
+                                    continue
+                                else:
+                                    pass
+                                checkpoint_dir = f'./output_{dataset_name}_{subset}_{nan_num}_{num_fut}_{model_type}'
+                                prep_params['feat_params'] = keep_nan_experiments_map[experiment]
+                                train_test_dict = data_step(path_params, prep_params, eval_params,
+                                                            keep_nan=False)
+
+                                start_time = datetime.now()
+                                results = model_step(train_test_dict, model_params, checkpoint_dir)
+                                end_time = datetime.now()
+                                print('Duration: {}'.format(end_time - start_time))
+                                print(results)
+
+                        else:
+                            train_test_dict = data_step(path_params, prep_params, eval_params,
+                                                        keep_nan=False)
+                            for model_type in args.model_type:
+                                model_params['model_type'] = model_type
+                                checkpoint_dir = f'./output_{dataset_name}_{subset}_{nan_num}_{num_fut}_{model_type}'
+
+                                start_time = datetime.now()
+                                results = model_step(train_test_dict, model_params, checkpoint_dir)
+                                end_time = datetime.now()
+                                print('Duration: {}'.format(end_time - start_time))
+                                print(results)
 
                     else:  # CRU, mTAN, GRU-D
                         train_test_dict = data_step(path_params, prep_params, eval_params,
