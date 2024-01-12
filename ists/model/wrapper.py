@@ -9,7 +9,7 @@ from .model import STTransformer, BaselineModel
 from ..preprocessing import StandardScalerBatch, MinMaxScalerBatch
 from ..metrics import compute_metrics
 from .ablation import TransformerSpatial, TransformerTemporal, TransformerExogenous, TransformerTemporalSpatial, \
-    TransformerSpatialExogenous, TransformerTemporalExogenous
+    TransformerSpatialExogenous, TransformerTemporalExogenous, STTnoEmbedding
 
 T = TypeVar('T', bound=tf.keras.Model)
 
@@ -30,6 +30,8 @@ def get_model(model_type: str, model_params) -> T:
     # Return the selected model
     if model_type == 'sttransformer':
         return STTransformer(**model_params)
+    elif model_type == 'stt_no_embd':
+        return STTnoEmbedding(**model_params)
     elif model_type == 'dense':
         return BaselineModel(feature_mask=model_params['feature_mask'], base_model='dense',
                              hidden_units=model_params['d_model'], skip_na=False, activation='gelu')

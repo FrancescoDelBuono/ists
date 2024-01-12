@@ -1,7 +1,7 @@
 import tensorflow as tf
 
 from .embedding import TemporalEmbedding, SpatialEmbedding
-from .encoder import EncoderLayer, CrossEncoderLayer
+from .encoder import EncoderLayer, CrossEncoderLayer, GlobalEncoderLayer
 
 
 class TransformerTemporal(tf.keras.Model):
@@ -458,4 +458,95 @@ class TransformerTemporalExogenous(tf.keras.Model):
         embedded_x = self.dense(embedded_x)
         pred = self.final_layer(embedded_x)
 
+        return pred
+
+
+class STTnoEmbedding(tf.keras.Model):
+    def __init__(
+            self,
+            *,
+            feature_mask,
+            exg_feature_mask,
+            spatial_size,
+            kernel_size,
+            d_model,
+            num_heads,
+            dff,
+            fff,
+            activation='relu',
+            exg_cnn=True,
+            spt_cnn=True,
+            time_cnn=True,
+            num_layers=1,
+            with_cross=True,
+            dropout_rate=0.1,
+            null_max_size=None,
+            time_max_sizes=None,
+            exg_time_max_sizes=None,
+    ):
+        super().__init__()
+
+        self.num_layers = num_layers
+        self.with_cross = with_cross
+        if with_cross:
+            exo_encoder_layer = CrossEncoderLayer
+        else:
+            exo_encoder_layer = EncoderLayer
+
+        self.temporal_encoders = [
+            EncoderLayer(
+                d_model=len(feature_mask),
+                num_heads=num_heads,
+                dff=dff,
+                dropout_rate=dropout_rate,
+                activation=activation,
+            )
+            for _ in range(self.num_layers)
+        ]
+        self.spatial_encoders = [
+            EncoderLayer(
+                d_model=len(feature_mask),
+                num_heads=num_heads,
+                dff=dff,
+                dropout_rate=dropout_rate,
+                activation=activation,
+            )
+            for _ in range(self.num_layers)
+        ]
+
+        self.exogenous_encoders = [
+            exo_encoder_layer(
+                d_model=len(exg_feature_mask),
+                num_heads=num_heads,
+                dff=dff,
+                dropout_rate=dropout_rate,
+                activation=activation,
+            )
+            for _ in range(self.num_layers)
+        ]
+
+        self.flatten = tf.keras.layers.Flatten()
+        self.dense = tf.keras.layers.Dense(fff, activation='gelu')
+        self.final_layer = tf.keras.layers.Dense(1)
+        self.last_attn_scores = None
+
+    def call(self, inputs, **kwargs):
+        time_x = inputs[0]
+        exogenous_x = inputs[1]
+        spatial_array = inputs[2:]
+        spatial_x = tf.concat(spatial_array, axis=1)
+
+        # temporal_emb, exogenous_emb, spatial_emb = self.encoder(temporal_x, exogenous_x, spatial_x)
+        for i in range(self.num_layers):
+            # Compute temporal, spatial, and exogenous embedding
+            time_x = self.temporal_encoders[i](x=time_x)
+            spatial_x = self.spatial_encoders[i](x=spatial_x)
+            if self.with_cross:
+                exogenous_x = self.exogenous_encoders[i](x=exogenous_x, context=time_x)
+            else:
+                exogenous_x = self.exogenous_encoders[i](x=exogenous_x)
+
+        embedded_x = tf.concat([self.flatten(time_x), self.flatten(spatial_x), self.flatten(exogenous_x)], axis=1)
+        embedded_x = self.dense(embedded_x)
+        pred = self.final_layer(embedded_x)
         return pred
