@@ -4,7 +4,7 @@
         "ctx_filename": "",
         "ex_filename": "./data/USHCN/subset_agg_th1_1.csv",
         "type": "ushcn",
-        "nan_percentage": 0.2
+        "nan_percentage": 0.5
     },
 
     "prep_params": {

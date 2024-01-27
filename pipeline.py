@@ -28,81 +28,6 @@ def parse_params():
     return conf['path_params'], conf['prep_params'], conf['eval_params'], conf['model_params']
 
 
-def get_params():
-    # Path params (i.e. time-series path, context table path)
-    base_dir = '../../Dataset/AdbPo/Piezo/'
-    path_params = {
-        # main time-series (i.e. piezo time-series)
-        'ts_filename': os.path.join(base_dir, 'ts_all.xlsx'),
-        # table with context information (i.e. coordinates...)
-        'ctx_filename': os.path.join(base_dir, 'data_ext_all.xlsx'),
-        # dictionary of exogenous time-series (i.e. temperature...)
-        'ex_filename': os.path.join(base_dir, 'NetCDF', 'exg_w_tp_t2m.pickle')
-    }
-
-    # Preprocessing params (i.e. num past, num future, sampling frequency, features....)
-    prep_params = {
-        'ts_params': {
-            'features': ['Piezometria (m)'],
-            'label_col': 'Piezometria (m)',
-            'num_past': 48,
-            'num_fut': 6,
-            'freq': 'M',  # ['M', 'W', 'D']
-        },
-        'feat_params': {
-            # Null Encoding
-            'null_feat': 'code_lin',  # ['code_bool', 'code_lin', 'bool', 'lin', 'log']
-            'null_max_dist': 12,
-            # Time Encoding
-            'time_feats': ['M']  # ['D', 'DW', 'WY', 'M']
-        },
-        'spt_params': {
-            'num_past': 36,
-            'num_spt': 5,
-            'max_dist_th': 10000,
-            'max_null_th': 13,
-        },
-        'exg_params': {
-            'num_past': 72,
-            'features': ['tp', 't2m_min', 't2m_max', 't2m_avg'],
-            'time_feats': ['WY', 'M']
-        },
-    }
-
-    # Evaluation train and test params
-    eval_params = {
-        'train_start': '2009-01-01',
-        'test_start': '2019-01-01',
-        'label_th': 1,
-        'null_th': 13,
-    }
-
-    model_params = {
-        'transform_type': 'standard',  # None 'minmax' 'standard'
-        'model_type': 'sttransformer',  # 'sttransformer', 'dense', 'lstm', 'bilstm', 'lstm_base', 'bilstm_base'
-        'nn_params': {
-            'kernel_size': 3,
-            'd_model': 32,
-            'num_heads': 8,
-            'dff': 64,
-            'fff': 32,
-            'activation': 'relu',
-            'exg_cnn': True,
-            'spt_cnn': True,
-            'time_cnn': True,
-            'dropout_rate': 0.2,
-            'num_layers': 2,
-            'with_cross': True,
-        },
-        'lr': 0.0,
-        'loss': 'mse',
-        'batch_size': 32,
-        'epochs': 5
-    }
-
-    return path_params, prep_params, eval_params, model_params
-
-
 def change_params(path_params: dict, base_string: str, new_string: str) -> dict:
     path_params['ts_filename'] = path_params['ts_filename'].replace(base_string, new_string, 1)
     path_params['ctx_filename'] = path_params['ctx_filename'].replace(base_string, new_string, 1)
@@ -308,7 +233,6 @@ def model_step(train_test_dict: dict, model_params: dict, checkpoint_dir: str) -
 
 
 def main():
-    # path_params, prep_params, eval_params, model_params = get_params()
     path_params, prep_params, eval_params, model_params = parse_params()
     # path_params = change_params(path_params, '../../data', '../../Dataset/AdbPo')
 

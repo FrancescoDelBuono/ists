@@ -4,7 +4,7 @@
         "ctx_filename": "./data/FrenchPiezo/dataset_stations.csv",
         "ex_filename": "./data/FrenchPiezo/subset_agg_th15_1.csv",
         "type": "french",
-        "nan_percentage": 0.2
+        "nan_percentage": 0.5
     },
 
     "prep_params": {
