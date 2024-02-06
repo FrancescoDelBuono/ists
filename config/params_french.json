@@ -57,7 +57,7 @@
             "with_cross": true,
             "dropout_rate": 0.1
         },
-        "lr": 0.0004,
+        "lr": 1e-4,
         "loss": "mse",
         "batch_size": 64,
         "epochs": 20
