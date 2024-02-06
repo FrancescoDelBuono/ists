@@ -174,6 +174,10 @@ def ablation(
     pickle_path = os.path.join(data_dir, f"{out_name}.pickle")
     checkpoint_path = os.path.join(model_dir, f"{out_name}")
 
+    print("Saving results in ", results_path)
+    print("Saving pickle in ", pickle_path)
+    print("Saving model in ", checkpoint_path)
+
     results = {}
 
     train_test_dict = data_step(path_params, prep_params, eval_params, keep_nan=False)
@@ -209,8 +213,17 @@ def ablation(
             'SE': ablation_encoder_se,
         })
 
+    ablation_extra_models = {
+        'TS_FE': ablation_encoder_ts_fe,
+        'STT_SE': ablation_encoder_stt_se,
+        'SE_SE': ablation_encoder_se_se,
+        'STT_MTS_E': ablation_encoder_stt_mts_e,
+    }
+
     if ablation_extra:
         ablations_mapping.update(ablation_extra)
+    else:
+        ablations_mapping.update(ablation_extra_models)
 
     for name, func in ablations_mapping.items():
         # Load data
@@ -228,36 +241,3 @@ def ablation(
         pd.DataFrame(results).T.to_csv(results_path, index=True)
 
     return pd.DataFrame(results).T
-
-
-def main():
-    res_dir = './output/results'
-    data_dir = './output/pickle'
-    model_dir = './output/model'
-
-    path_params, prep_params, eval_params, model_params = parse_params()
-    # path_params = change_params(path_params, '../../data', '../../Dataset/AdbPo')
-
-    ablation(
-        path_params=path_params,
-        prep_params=prep_params,
-        eval_params=eval_params,
-        model_params=model_params,
-        res_dir=res_dir,
-        data_dir=data_dir,
-        model_dir=model_dir,
-        ablation_embedder=True,
-        ablation_encoder=True,
-        ablation_extra={
-            'TS_FE': ablation_encoder_ts_fe,
-            'STT_SE': ablation_encoder_stt_se,
-            'SE_SE': ablation_encoder_se_se,
-            'STT_MTS_E': ablation_encoder_stt_mts_e,
-        }
-    )
-
-    print('Hello World!')
-
-
-if __name__ == '__main__':
-    main()
