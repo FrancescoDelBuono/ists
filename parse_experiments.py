@@ -6,32 +6,38 @@ import pandas as pd
 
 parser = argparse.ArgumentParser('FDB Parser')
 # train configs
-parser.add_argument('--ignore-incomplete', action='store_true', default=False,
+parser.add_argument('-i', '--ignore-incomplete', action='store_true', default=False,
                     help="Ignores incomplete model runs instead of raising an Exception.")
 
-parser.add_argument('--models', nargs='+', default=['GRU-D', 'CRU', 'mTAN', 'ISTS'],
+parser.add_argument('-m', '--models', nargs='+', default=['GRU-D', 'CRU', 'mTAN', 'ISTS'],
                     help="List of models to gather logs for.")
 
-parser.add_argument('--folder', type=str, default='.',
+parser.add_argument('-f', '--folder', type=str, default='.',
                     help="Folder containing the logs to parse if you prefer to skip the default behaviour.")
 
-parser.add_argument('--paper_table', action='store_true', default=False,
+parser.add_argument('-p', '--paper_table', action='store_true', default=False,
                     help="Prepares data in a format useful for reporting it in a paper.")
 
-parser.add_argument('--metric', type=str, default='Test_MAE',
+parser.add_argument('-me', '--metric', type=str, default='Test_MAE',
                     help="Metric to extract when using the --paper_table flag.")
 
-parser.add_argument('--merge', action='store_true', default=False,
+parser.add_argument('-M', '--merge', action='store_true', default=False,
                     help="Merge the results of ISTS and the other models in a single dataframe.")
 
-parser.add_argument('--fill_old', action='store_true', default=False,
+parser.add_argument('-fo', '--fill_old', action='store_true', default=False,
                     help="Fill the table with old results first, then add the new ones.")
 
-parser.add_argument('--ablation', action='store_true', default=False,
-                    help="Parse the ablation experiments results.")
+parser.add_argument('--encoder_ablation', action='store_true', default=False,
+                    help="Parse the encoder ablation experiments results.")
 
-parser.add_argument('--debug_model', type=str, default=None, nargs='+',
+parser.add_argument('--embedder_ablation', action='store_true', default=False,
+                    help="Parse the embedder ablation experiments results.")
+
+parser.add_argument('-d', '--debug_model', type=str, default=None, nargs='+',
                     help="Activate debug messages for a specific model.")
+
+parser.add_argument('-pt', '--parse-time', action='store_true', default=False,
+                    help="Parse the time required to compute the training phase and store the data in a table.")
 
 args = parser.parse_args()
 
@@ -49,9 +55,28 @@ file_start = {
     'ISTS': 'ists_output_'
 }
 
-models = ['t', 's', 'e', 'ts', 'te', 'se'] if args.ablation else ['ISTS', 'GRU-D', 'CRU', 'mTAN']
+if args.encoder_ablation:
+    models = ['t', 's', 'e', 'ts', 'te', 'se']
+    args.models = ['ISTS']
 
-if args.ablation:
+elif args.embedder_ablation:
+    models = ['w/o time enc', 'w/o null enc', 'w/o time null enc', 'w/o STT Encoder']
+    args.models = ['ISTS']
+
+else:
+    models = ['ISTS', 'GRU-D', 'CRU', 'mTAN']
+
+emb_abl_exp_mapping = {
+    '1': 'w/o time enc',
+    '2': 'w/o null enc',
+    '3': 'w/o time null enc',
+    '4': 'w/o STT Encoder'
+}
+
+# TODO: implement time parse
+# TODO: implement new ablation data (csv) merge
+
+if args.encoder_ablation or args.embedder_ablation:
     df_dict = {model: pd.DataFrame() for model in models}
 else:
     df_dict = {model: pd.DataFrame() for model in args.models}
@@ -62,17 +87,17 @@ loss_df = pd.DataFrame()
 def parse_ists(file):
     global loss_df, df_dict
 
-    if not args.ablation:
-        df = df_dict['ISTS']
-    else:
-        df = None
-
     custom_nan = -999.0
 
-    if not args.ablation:
+    if not args.encoder_ablation and not args.embedder_ablation:
+        df = df_dict['ISTS']
+
         if df.empty:
             for column in [f'{mode}_{metric}' for mode in ['Train', 'Test'] for metric in ['R2', 'MSE', 'MAE']]:
                 df[column] = custom_nan
+
+    else:
+        df = None
 
     if loss_df.empty:
         for column in [f'{mode}_{metric}' for mode in ['Loss', 'Val_Loss'] for metric in range(20)]:
@@ -98,7 +123,17 @@ def parse_ists(file):
         elif 'model_type' in info:
             model_type = info.split('=')[-1].strip()
 
-    if args.ablation:
+            if model_type == 'sttransformer':
+                model_type = 'stt'
+
+    if model_type is None:
+        if args.embedder_ablation:
+            model_type = ''
+
+        else:
+            raise RuntimeError("Missing model type in log info string (first line).")
+
+    if args.encoder_ablation:
         df = df_dict[model_type]
 
         if df.empty:
@@ -106,12 +141,31 @@ def parse_ists(file):
                 df[column] = custom_nan
 
     with open(file, 'r') as log_file:
-        idx_string = f"{dataset_name}_{subset}_nan{nan_num}_nf{num_fut}_{model_type}"
-        if not args.fill_old or idx_string not in df.index:
-            df.loc[idx_string] = [custom_nan] * len(df.columns)
-            loss_df.loc[idx_string] = [custom_nan] * len(loss_df.columns)
+        if not model_type:
+            idx_string = f"{dataset_name}_{subset}_nan{nan_num}_nf{num_fut}"
+        else:
+            idx_string = f"{dataset_name}_{subset}_nan{nan_num}_nf{num_fut}_{model_type}"
+        if df is not None:
+            if not args.fill_old or idx_string not in df.index:
+                df.loc[idx_string] = [custom_nan] * len(df.columns)
+                loss_df.loc[idx_string] = [custom_nan] * len(loss_df.columns)
 
+        experiment_num = None
         for line in log_file:
+            if "keep_nan experiment" in line or "embedder ablation experiment" in line:
+                if experiment_num is None:
+                    experiment_num = line.split('experiment')[-1].split('.')[0].strip()
+                    experiment_type = emb_abl_exp_mapping[experiment_num]
+                    df = df_dict[experiment_type]
+
+                else:
+                    experiment_type = emb_abl_exp_mapping[experiment_num]
+                    df_dict[experiment_type] = df
+                    experiment_num = line.split('experiment')[-1].split('.')[0].strip()
+                    df = df_dict[emb_abl_exp_mapping[experiment_num]]
+
+                idx_string += f'_{experiment_num}'
+
             if 'test_r2' in line and 'train_r2' in line:
                 metrics = eval(line)
 
@@ -128,8 +182,11 @@ def parse_ists(file):
                     except ValueError:
                         loss_df.loc[idx_string, [f'Loss_{epoch}', f'Val_Loss_{epoch}']] = [np.nan, np.nan]
 
-    if args.ablation:
+    if args.encoder_ablation:
         df_dict[model_type] = df
+    elif args.embedder_ablation:
+        if experiment_num is not None:
+            df_dict[emb_abl_exp_mapping[experiment_num]] = df
     else:
         # maybe superfluous
         df_dict['ISTS'] = df
@@ -170,11 +227,11 @@ def parse_model(model, file):
         else:  # parse the file with the correct modality per model
             if model == 'GRU-D':
                 try:
-                    if 'Performance metrics:' in metrics[-6] or 'Performance metrics:' in metrics[-5]:
-                        if 'Performance metrics:' in metrics[-6]:
-                            metrics = metrics[-5:-2]
-                        else:
+                    if 'Performance metrics:' in metrics[-5] or 'Performance metrics:' in metrics[-4]:
+                        if 'Performance metrics:' in metrics[-5]:
                             metrics = metrics[-4:-1]
+                        else:
+                            metrics = metrics[-3:]
 
                         for line, metric in zip(metrics, ['R2', 'MAE', 'MSE']):
                             if debug:
@@ -206,12 +263,12 @@ def parse_model(model, file):
 
                                     saved_train_metric = df.loc[dataset_name, f'Train_{metric}']
                                     if saved_train_metric != custom_nan and not np.isnan(saved_train_metric):
-                                        df.loc[dataset_name,
-                                        f'Train_{metric}'] = get_best(metrics[0],
-                                                                      df.loc[dataset_name, f'Train_{metric}'])
+                                        df.loc[dataset_name, f'Train_{metric}'] = get_best(metrics[0],
+                                                                                           df.loc[
+                                                                                               dataset_name,
+                                                                                               f'Train_{metric}'])
                                     else:
-                                        df.loc[dataset_name,
-                                        f'Train_{metric}'] = metrics[0]
+                                        df.loc[dataset_name, f'Train_{metric}'] = metrics[0]
 
                                     saved_valid_metric = df.loc[dataset_name, f'Valid_{metric}']
                                     if saved_valid_metric != custom_nan and not np.isnan(saved_valid_metric):
@@ -253,8 +310,8 @@ def parse_model(model, file):
 
             elif model == 'CRU':
                 try:
-                    metrics = metrics[-3:]
-                    if 'Train MAE' in metrics[-1]:
+                    metrics = metrics[-4:]
+                    if 'Train MAE' in metrics[-2]:
 
                         for line, metric in zip(metrics, ['R2', 'MSE', 'MAE']):
                             train_valid, test = line.split(f'Test RMSE:' if 'RMSE' in line
@@ -479,7 +536,7 @@ def parse_model(model, file):
 
 
 def main():
-    global models
+    global models, df_dict, loss_df
 
     if args.fill_old:
         parse_logs('./backup_logs')
@@ -490,15 +547,22 @@ def main():
         nan_nums = [0.0, 0.2, 0.5, 0.8]
         num_futs = [7, 14, 30, 60]
 
-        columns = pd.MultiIndex.from_tuples([(nan_num, model) for nan_num in nan_nums for model in models],
-                                            names=['nan_num', 'model'])
+        if not args.embedder_ablation:
+            columns = pd.MultiIndex.from_tuples([(nan_num, model) for nan_num in nan_nums for model in models],
+                                                names=['nan_num', 'model'])
+
+        else:
+            columns = pd.MultiIndex.from_tuples([(nan_num, version)
+                                                 for version in models
+                                                 for nan_num in nan_nums],
+                                                names=['nan_num', 'model version'])
 
         complete_dfs = {num_fut: pd.DataFrame(columns=columns) for num_fut in num_futs}
         for num_fut, complete_df in complete_dfs.items():
             complete_df.rename_axis(index='Dataset', inplace=True)
             # example: french_subset_agg_th1_1_0.2_nf14_sttransformer
             for model, df in df_dict.items():
-                subset_df = df.loc[df.index.str.contains(f'nf{num_fut}')]
+                subset_df = df.loc[df.index.astype(str).str.contains(f'nf{num_fut}')]
 
                 parameters = subset_df.index.to_series().apply(lambda dataset_: dataset_.split('_'))
                 subset_idx = -1
@@ -517,18 +581,32 @@ def main():
                     subset = '_'.join(dataset_params[subset_idx:nan_idx])
                     nan_num = float(dataset_params[nan_idx].split('nan')[-1]) / 10
 
-                    complete_df.loc[f"{dataset}_{subset}",
-                    (nan_num, model)] = subset_df.loc[original_dataset_name, args.metric]
+                    if not args.embedder_ablation:
+                        complete_df.loc[f"{dataset}_{subset}",
+                                        (nan_num, model)] = subset_df.loc[original_dataset_name, args.metric]
+                    else:
+                        complete_df.loc[f"{dataset}_{subset}", (nan_num, model)] = \
+                            subset_df.loc[original_dataset_name, args.metric]
 
             complete_df.sort_index(inplace=True)
             # complete_df.sort_index(axis=1, level=['model', 'nan_num'], ascending=[True, True], inplace=True)
             # force order of columns
-            if args.ablation:
+            if args.encoder_ablation:
                 complete_df = complete_df.loc[:,
                               [(0.0, 't'), (0.0, 's'), (0.0, 'e'), (0.0, 'ts'), (0.0, 'te'), (0.0, 'se'),
                                (0.2, 't'), (0.2, 's'), (0.2, 'e'), (0.2, 'ts'), (0.2, 'te'), (0.2, 'se'),
                                (0.5, 't'), (0.5, 's'), (0.5, 'e'), (0.5, 'ts'), (0.5, 'te'), (0.5, 'se'),
                                (0.8, 't'), (0.8, 's'), (0.8, 'e'), (0.8, 'ts'), (0.8, 'te'), (0.8, 'se')]]
+
+            elif args.embedder_ablation:
+                complete_df = complete_df.loc[:, [(0.0, emb_abl_exp_mapping['1']), (0.0, emb_abl_exp_mapping['2']),
+                                                  (0.0, emb_abl_exp_mapping['3']), (0.0, emb_abl_exp_mapping['4']),
+                                                  (0.2, emb_abl_exp_mapping['1']), (0.2, emb_abl_exp_mapping['2']),
+                                                  (0.2, emb_abl_exp_mapping['3']), (0.2, emb_abl_exp_mapping['4']),
+                                                  (0.5, emb_abl_exp_mapping['1']), (0.5, emb_abl_exp_mapping['2']),
+                                                  (0.5, emb_abl_exp_mapping['3']), (0.5, emb_abl_exp_mapping['4']),
+                                                  (0.8, emb_abl_exp_mapping['1']), (0.8, emb_abl_exp_mapping['2']),
+                                                  (0.8, emb_abl_exp_mapping['3']), (0.8, emb_abl_exp_mapping['4'])]]
 
             else:
                 complete_df = complete_df.loc[:, [(0.0, 'ISTS'), (0.0, 'GRU-D'), (0.0, 'mTAN'), (0.0, 'CRU'),
@@ -536,23 +614,47 @@ def main():
                                                   (0.5, 'ISTS'), (0.5, 'GRU-D'), (0.5, 'mTAN'), (0.5, 'CRU'),
                                                   (0.8, 'ISTS'), (0.8, 'GRU-D'), (0.8, 'mTAN'), (0.8, 'CRU')]]
 
-            complete_filename = (f'{"ablation" if args.ablation else "complete"}'
-                                 f'_results_{"old_filled_" if args.fill_old else ""}'
-                                 f'nf{num_fut}_{args.metric}.csv')
+            if args.encoder_ablation:
+                complete_filename = "encoder_ablation"
+            elif args.embedder_ablation:
+                complete_filename = "embedder_ablation"
+            else:
+                complete_filename = "complete"
+
+            complete_filename += f'_results_{"old_filled_" if args.fill_old else ""}nf{num_fut}_{args.metric}.csv'
+
             complete_df.to_csv(complete_filename)
 
     else:
         for model, df in df_dict.items():
             df.rename_axis(index='Dataset', inplace=True)
-            df.to_csv(f'{model}_{"ablation_" if args.ablation else ""}results.csv')
+            complete_filename = f'{model}_'
+
+            if args.encoder_ablation:
+                complete_filename += "encoder_ablation_"
+            elif args.embedder_ablation:
+                complete_filename += "embedder_ablation_"
+
+            complete_filename += 'results.csv'
+            df.to_csv(complete_filename)
 
     if not loss_df.empty:
         loss_df.rename_axis(index='Dataset', inplace=True)
-        loss_df.to_csv(f'ists_{"ablation_" if args.ablation else ""}losses.csv')
+
+        complete_filename = 'ists_'
+
+        if args.encoder_ablation:
+            complete_filename += "encoder_ablation_"
+        elif args.embedder_ablation:
+            complete_filename += "embedder_ablation_"
+
+        complete_filename += 'losses.csv'
+        loss_df.to_csv(complete_filename)
 
 
 def parse_logs(folder: str):
     wdir = os.getcwd()
+
     for model in args.models:
         if folder != '.':
             print(f"Moving to {folder}.")
@@ -572,7 +674,7 @@ def parse_logs(folder: str):
             if file.startswith(file_start[model]):
                 print(f'Parsing {file}...')
 
-                if model == 'ISTS' or args.ablation:
+                if model == 'ISTS' or args.encoder_ablation or args.embedder_ablation:
                     parse_ists(file)
 
                 else:
@@ -583,18 +685,34 @@ def parse_logs(folder: str):
 
 def merge():
     ists_results_path = './ists_complete_results'
-    old_filled_files = [file for file in os.listdir() if 'old_filled' in file and file.endswith('.csv')]
-    for csv_file in [file for file in os.listdir(ists_results_path) if file.endswith('.csv')]:
+    old_filled_files = [file for file in os.listdir() if 'old_filled' in file
+                        and file.endswith('.csv') and 'losses' not in file]
+    for csv_file in [file for file in os.listdir(ists_results_path) if file.endswith('.csv') and 'losses' not in file]:
         ists_results = pd.read_csv(os.path.join(ists_results_path, csv_file), index_col=0, header=[0, 1])
 
-        if args.ablation:
-            ablation_results = pd.read_csv(csv_file.replace('complete', 'ablation'),
-                                           index_col=0, header=[0, 1])
+        if args.encoder_ablation or args.embedder_ablation:
+            if args.encoder_ablation:
+                ablation_results = pd.read_csv(csv_file.replace('complete', 'encoder_ablation'),
+                                               index_col=0, header=[0, 1])
+                final_filename = csv_file.replace('complete', 'encoder_ablation')
 
-            for idx, nan_num in enumerate(('0.0', '0.2', '0.5', '0.8')):
-                ablation_results.insert(idx, (nan_num, 'sttransformer'), ists_results.loc[:, (nan_num, 'ISTS')])
+            else:
+                ablation_results = pd.read_csv(csv_file.replace('complete', 'embedder_ablation'),
+                                               index_col=0, header=[0, 1])
+                final_filename = csv_file.replace('complete', 'embedder_ablation')
 
-            ablation_results.to_csv(csv_file.replace('complete', 'ablation'))
+            inserted_columns = 0
+            while inserted_columns < 4:
+                for idx, column in enumerate(ablation_results.columns):
+                    nan_num, _ = column
+
+                    if idx == 0 or ablation_results.columns[idx - 1][0] != nan_num:
+                        if (nan_num, 'stt') not in ablation_results.columns:
+                            ablation_results.insert(idx, (nan_num, 'stt'), ists_results.loc[:, (nan_num, 'ISTS')])
+                            inserted_columns += 1
+                            break
+
+            ablation_results.to_csv(final_filename)
 
         else:
             others_results = pd.read_csv(csv_file, index_col=0, header=[0, 1])
@@ -604,7 +722,7 @@ def merge():
 
             others_results.to_csv(csv_file)
 
-            if old_filled_files:
+            if args.fill_old and old_filled_files:
                 for file in old_filled_files:
                     if ''.join(file.split('_old_filled')) == csv_file:
                         print(f"Merging with old_filled results {file}.")
