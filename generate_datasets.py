@@ -18,6 +18,15 @@ parser = argparse.ArgumentParser('FDB Dataset Generator')
 parser.add_argument('--config', type=str, nargs='+', default='all',
                     help="Select different configs to generate the datasets.")
 
+parser.add_argument('--subset', type=str, nargs='+', default='all',
+                    help="Select different subsets to generate the datasets.")
+
+parser.add_argument('--num_fut', type=int, nargs='+', default=0,
+                    help="Select different values of num_futures to generate the datasets.")
+
+parser.add_argument('--nan_num', type=float, nargs='+', default=1.0,
+                    help="Select different values of nan_num to generate the datasets.")
+
 args = parser.parse_args()
 
 
@@ -193,21 +202,21 @@ def main():
         'subset_agg_th15_1.csv',
         'subset_agg_th15_2.csv',
         'subset_agg_th15_3.csv'
-    ]
+    ] if args.subset == 'all' else args.subset
 
     nan_nums = [
         0.0,
         0.2,
         0.5,
         0.8
-    ]
+    ] if args.nan_num == 1.0 else args.nan_num
 
     num_futs = [
         7,
         14,
         30,
         60
-    ]
+    ] if args.num_fut == 0 else args.num_fut
 
     os.makedirs('./data/pickles', exist_ok=True)
     for folder_path in conf_files.values():
