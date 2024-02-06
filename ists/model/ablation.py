@@ -461,7 +461,7 @@ class TransformerTemporalExogenous(tf.keras.Model):
         return pred
 
 
-class STTnoEmbedding(tf.keras.Model):
+class STTNoEmbedding(tf.keras.Model):
     def __init__(
             self,
             *,
