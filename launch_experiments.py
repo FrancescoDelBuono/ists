@@ -144,7 +144,7 @@ def check_launch_model(model, dataset):
     }
 
     launch = True
-
+    completed = False
     log_files = [file for file in os.listdir(wdirs[model]) if file.endswith('.pickle.txt')]
 
     ran = False
@@ -163,14 +163,21 @@ def check_launch_model(model, dataset):
 
                             if len(last_lines) < 4:
                                 break
+
+                            # check if model crashed, if so, skip execution
+                            crashed = "ValueError: NaN in gradient" in last_lines[-1]
                             # be completely sure that the results are structured as they should to say that the run was
                             # successful
-                            if last_lines[0].startswith('Train R2:') and last_lines[1].startswith('Train MSE:') and \
-                                    last_lines[2].startswith('Train MAE:') and last_lines[3].startswith('Duration:'):
+                            completed = last_lines[0].startswith('Train R2:') and \
+                                last_lines[1].startswith('Train MSE:') and \
+                                last_lines[2].startswith('Train MAE:') and last_lines[3].startswith('Duration:')
+
+                            if crashed or completed:
                                 print(f"Log file {file}, last lines:")
                                 print(last_lines)
                                 print("Skipping execution.")
                                 launch = False
+
                                 break
 
                         # TODO: to implement if necessary
@@ -183,7 +190,7 @@ def check_launch_model(model, dataset):
     if launch:
         print(f"Execution check True for {model} on {dataset}.")
 
-    return launch
+    return launch, True if completed else False
 
 
 def main():
@@ -204,6 +211,7 @@ def main():
         batch_run = True
         datasets = [os.path.join(args.datasets_path, file) for file in os.listdir(args.datasets_path)
                     if file.endswith('.pickle')]
+
     elif os.path.isfile(args.datasets_path):
         datasets = [args.datasets_path]
     else:
@@ -279,16 +287,32 @@ def main():
 
             devices = manager.dict({cpu_core: manager.Lock()} for cpu_core in range(max_workers))
 
+        crashed_runs = successful_runs = 0
+
         # TODO: it appears that the number of processes able to run is somehow limited by the Manager. Having
         #  max_workers > len(devices) still causes the program to run with at most len(devices) processes.
         with futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
             for dataset in datasets:
                 for model in models:
                     futures_ = list()
+                    if batch_run:
+                        launch, completed = check_launch_model(model, dataset)
 
-                    if (batch_run and check_launch_model(model, dataset)) or not batch_run:
+                        if completed:
+                            successful_runs += 1
+                        else:
+                            crashed_runs += 1
+
+                    if (batch_run and launch) or not batch_run:
                         futures_.append(executor.submit(launch_model, model, dataset, devices, args.recycle_gpu))
 
+            if isinstance(datasets, list):
+                print("Total datasets found: ", len(datasets))
+                print("Recap of already computed datasets:")
+                print(f"Total successful runs: {successful_runs}")
+                print(f"Total crashed or yet to execute runs: {crashed_runs}", flush=True)
+
+            print("Starting experiments.", flush=True)
             done, not_done = futures.wait(futures_, return_when=futures.ALL_COMPLETED)
 
             futures_exceptions = [future.exception() for future in done]
