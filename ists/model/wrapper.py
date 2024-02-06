@@ -9,7 +9,7 @@ from .model import STTransformer, BaselineModel
 from ..preprocessing import StandardScalerBatch, MinMaxScalerBatch
 from ..metrics import compute_metrics
 from .ablation import TransformerSpatial, TransformerTemporal, TransformerExogenous, TransformerTemporalSpatial, \
-    TransformerSpatialExogenous, TransformerTemporalExogenous, STTnoEmbedding
+    TransformerSpatialExogenous, TransformerTemporalExogenous, STTNoEmbedding
 from .ablation import TSWithExogenousFeatures, STTWithSpatialExogenous, SEWithSpatialExogenous
 
 T = TypeVar('T', bound=tf.keras.Model)
@@ -29,45 +29,53 @@ def get_transformer(transform_type: str) -> object:
 
 def get_model(model_type: str, model_params) -> T:
     # Return the selected model
-    if model_type == 'sttransformer':
-        return STTransformer(**model_params)
-    elif model_type == 'stt_no_embd':
-        return STTnoEmbedding(**model_params)
-    elif model_type == 'dense':
-        return BaselineModel(feature_mask=model_params['feature_mask'], base_model='dense',
-                             hidden_units=model_params['d_model'], skip_na=False, activation='gelu')
-    elif model_type == 'lstm':
-        return BaselineModel(feature_mask=model_params['feature_mask'], base_model='lstm',
-                             hidden_units=model_params['d_model'], skip_na=True, activation='gelu')
-    elif model_type == 'bilstm':
-        return BaselineModel(feature_mask=model_params['feature_mask'], base_model='bilstm',
-                             hidden_units=model_params['d_model'], skip_na=True, activation='gelu')
-    elif model_type == 'lstm_base':
-        return BaselineModel(feature_mask=model_params['feature_mask'], base_model='lstm',
-                             hidden_units=model_params['d_model'], skip_na=False, activation='gelu')
-    elif model_type == 'bilstm_base':
-        return BaselineModel(feature_mask=model_params['feature_mask'], base_model='bilstm',
-                             hidden_units=model_params['d_model'], skip_na=False, activation='gelu')
-    elif model_type == 't':
-        return TransformerTemporal(**model_params)
-    elif model_type == 's':
-        return TransformerSpatial(**model_params)
-    elif model_type == 'e':
-        return TransformerExogenous(**model_params)
-    elif model_type == 'ts':
-        return TransformerTemporalSpatial(**model_params)
-    elif model_type == 'te':
-        return TransformerTemporalExogenous(**model_params)
-    elif model_type == 'se':
-        return TransformerSpatialExogenous(**model_params)
-    elif model_type == 'ts_fe':
-        return TSWithExogenousFeatures(**model_params)
-    elif model_type == 'stt_se':
-        return STTWithSpatialExogenous(**model_params)
-    elif model_type == 'se_se':
-        return SEWithSpatialExogenous(**model_params)
-    else:
-        raise ValueError('Model {} is not supported, it must be "sttransformer"')
+    model_types = {
+        'sttransformer': STTransformer,
+        'stt_no_embd': STTNoEmbedding,
+        'dense': BaselineModel,
+        'lstm': BaselineModel,
+        'bilstm': BaselineModel,
+        'lstm_base': BaselineModel,
+        'bilstm_base': BaselineModel,
+        't': TransformerTemporal,
+        's': TransformerSpatial,
+        'e': TransformerExogenous,
+        'ts': TransformerTemporalSpatial,
+        'te': TransformerTemporalExogenous,
+        'se': TransformerSpatialExogenous,
+        'ts_fe': TSWithExogenousFeatures,
+        'stt_se': STTWithSpatialExogenous,
+        'se_se': SEWithSpatialExogenous
+    }
+
+    parameters = {
+        'sttransformer': model_params,
+        'stt_no_embd': model_params,
+        'dense': {'feature_mask': model_params['feature_mask'], 'base_model': 'dense',
+                  'hidden_units': model_params['d_model'], 'skip_na': False, 'activation': 'gelu'},
+        'lstm': {'feature_mask': model_params['feature_mask'], 'base_model': 'lstm',
+                 'hidden_units': model_params['d_model'], 'skip_na': True, 'activation': 'gelu'},
+        'bilstm': {'feature_mask': model_params['feature_mask'], 'base_model': 'bilstm',
+                   'hidden_units': model_params['d_model'], 'skip_na': True, 'activation': 'gelu'},
+        'lstm_base': {'feature_mask': model_params['feature_mask'], 'base_model': 'lstm',
+                      'hidden_units': model_params['d_model'], 'skip_na': False, 'activation': 'gelu'},
+        'bilstm_base': {'feature_mask': model_params['feature_mask'], 'base_model': 'bilstm',
+                        'hidden_units': model_params['d_model'], 'skip_na': False, 'activation': 'gelu'},
+        't': model_params,
+        's': model_params,
+        'e': model_params,
+        'ts': model_params,
+        'te': model_params,
+        'se': model_params,
+        'ts_fe': model_params,
+        'stt_se': model_params,
+        'se_se': model_params
+    }
+
+    if model_type not in model_types:
+        raise ValueError('Model {} is not supported.')
+
+    return model_types[model_type](**parameters[model_type])
 
 
 def custom_mae_loss(y_true, y_pred):
@@ -304,7 +312,7 @@ class ModelWrapper(object):
             save_weights_only=True,
             mode='min',
             # verbose=1,
-            verbose=0
+            verbose=1
             # save_format='tf'
         )
         if self.lr > 0:
