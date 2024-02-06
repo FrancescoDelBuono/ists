@@ -2,8 +2,13 @@ import os
 import json
 import argparse
 import pickle
+import socket
+from concurrent import futures
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
+from multiprocessing import Manager, get_context
 
+from ablation import ablation
 from ists.dataset.read import load_data
 from ists.preparation import prepare_data, prepare_train_test, filter_data
 from ists.preparation import define_feature_mask, get_list_null_max_size
@@ -24,7 +29,7 @@ parser.add_argument('--device', type=str, nargs='+',
 parser.add_argument('--model', type=str, nargs='+', default=['ISTS'],
                     help='model to use (ISTS, CRU, mTAN, GRU-D, ...)')
 
-parser.add_argument('--num_fut', type=int, nargs='+', default=[7],
+parser.add_argument('--num_fut', type=int, nargs='+', default=[7, 14, 30, 60],
                     help='number of days from the present to predict.')
 parser.add_argument('--nan_num', type=float, nargs='+', default=[0.0, 0.2, 0.5, 0.8])
 parser.add_argument('--subset', type=str, nargs='+',
@@ -34,22 +39,28 @@ parser.add_argument('--subset', type=str, nargs='+',
                              ],
                     help='subset of the dataset to use.')
 parser.add_argument('--model_type', type=str, nargs='+',
-                    default=['sttransformer', 't', 's', 'e', 'ts', 'te', 'se'])
+                    default=['sttransformer', 't', 's', 'e', 'ts', 'te', 'se', 'stt_no_embd'])
 
 parser.add_argument('--batch_run', action='store_true', default=False,
-                    help='run the models in parallel on multiple datasets and GPUs.')
+                    help='Run the models in parallel on multiple datasets and GPUs.')
+
+parser.add_argument('--ablation_run', action='store_true', default=False,
+                    help='Run the ablation experiments in parallel on multiple GPUs, in batch.')
 
 parser.add_argument('--dataset_folder', type=str, default=None,
-                    help='folder containing the datasets for batch run.')
+                    help='Folder containing the datasets for batch run.')
 
 parser.add_argument('--recycle_gpu', action='store_true', default=False,
                     help='Use the same GPU for multiple processes, exploiting the available VRAM.')
 
-parser.add_argument('--keep_nan', action='store_true', default=False,
-                    help='Do not remove NaN values from the dataset for ISTS.')
+parser.add_argument('--encoder_ablation', action='store_true', default=False,
+                    help='Run encoder ablation experiments for ISTS.')
 
-parser.add_argument('--keep_nan_fourth', action='store_true', default=False,
-                    help='Do not remove NaN values from the dataset for ISTS.')
+parser.add_argument('--embedder_ablation', action='store_true', default=False,
+                    help='Run embedder ablation experiments for ISTS.')
+
+parser.add_argument('--ablation_experiments', nargs='+', type=int, default=[1, 2, 3, 4],
+                    help='Experiment numbers to run for the embedder ablation, from 1 to 4.')
 
 args = parser.parse_args()
 
@@ -60,23 +71,55 @@ args = parser.parse_args()
     'config/params_french_baseline.json': 'data/pickles/french_baseline'
 }"""
 
-keep_nan_experiments_map = {
-    0: {
-        'null_feat': None,
-        'null_max_dist': 12,
-        'time_feats': []
-    },
+embedder_ablation_experiments_map = {
     1: {
-        'null_feat': 'code_bool',
-        'null_max_dist': 12,
-        'time_feats': []
+        "feat_params": {
+            'null_feat': None,
+            'null_max_dist': 12,
+            'time_feats': []
+        }
     },
     2: {
-        'null_feat': None,
-        'null_max_dist': 12,
-        'time_feats': ['WY']
+        "feat_params": {
+            'null_feat': 'code_bool',
+            'null_max_dist': 12,
+            'time_feats': []
+        }
     },
-    3: {}
+    3: {
+        "feat_params": {
+            'null_feat': None,
+            'null_max_dist': 12,
+            'time_feats': ['WY']
+        }
+    },
+    4: {
+        "model_params": {
+            "model_type": "stt_no_embd",
+            "nn_params": {
+                "kernel_size": 5,
+                "d_model": 64,
+                "num_heads": 4,
+                "dff": 128,
+                "fff": 64,
+                "activation": "relu",
+                "exg_cnn": True,
+                "spt_cnn": True,
+                "time_cnn": True,
+                "num_layers": 1,
+                "with_cross": True,
+                "dropout_rate": 0.1
+            },
+        },
+        "feat_params": {
+            "null_feat": None,
+            "null_max_dist": 12,
+            "time_feats": []
+        },
+        "exg_params": {
+            "time_feats": []
+        }
+    }
 }
 
 
@@ -348,6 +391,147 @@ def batch_run():
     print("Batch run ended.")
 
 
+def run_parallel_ablation(gpu_locks: list, path_params: dict, prep_params: dict, eval_params: dict,
+                          model_params: dict, res_dir: str, data_dir: str, model_dir: str):
+
+    device = 'cpu'
+    device_idx = -1
+
+    if args.device == ['all']:
+        args.device = ['cuda:{}'.format(i) for i in range(len(tf.config.list_physical_devices('GPU')))]
+
+    for i, lock in enumerate(gpu_locks):
+        if lock.acquire(blocking=False):
+            device = args.device[i]
+            device_idx = i
+            break
+
+    print(f"Running on device {device}")
+    gpus = tf.config.list_physical_devices('GPU')
+    gpu_idx = int(device[-1])
+    tf.config.set_visible_devices(gpus[gpu_idx], 'GPU')
+
+    try:
+        ablation(
+            path_params=path_params,
+            prep_params=prep_params,
+            eval_params=eval_params,
+            model_params=model_params,
+            res_dir=res_dir,
+            data_dir=data_dir,
+            model_dir=model_dir,
+            ablation_embedder=True,
+            ablation_encoder=True,
+        )
+
+    except Exception as e:
+        print(e)
+        raise e
+
+    finally:  # this is always executed if an exception is raised or not
+        gpu_locks[device_idx].release()
+
+
+def ablation_run():
+    res_dir = './output/results'
+    data_dir = './output/pickle'
+    model_dir = './output/model'
+
+    if args.device == ['all']:
+        args.device = ['cuda:{}'.format(i) for i in range(len(tf.config.list_physical_devices('GPU')))]
+
+    path_params, prep_params, eval_params, model_params = parse_params()
+    # path_params = change_params(path_params, '../../data', '../../Dataset/AdbPo')
+
+    # if 'gnode01' in socket.gethostname():
+    # print("Running on ARIES.")
+    if len(args.device) == 1:
+        # if len(args.subset) > 1 or len(args.nan_num) > 1 or len(args.num_fut) > 1:
+        if len(args.nan_num) > 1 or len(args.num_fut) > 1:
+            print("Single device, multiple parameter sets.")
+
+            # for subset in args.subset:
+            for nan_num in args.nan_num:
+                for num_fut in args.num_fut:
+                    print("Launching ablation with params:")
+                    # print(f"subset: {subset}")
+                    print(f"nan_num: {nan_num}")
+                    print(f"num_fut: {num_fut}")
+
+                    if 'ushcn' in args.file.lower():
+                        # path_params["ex_filename"] = "./data/USHCN/" + subset
+                        path_params["ex_filename"] = "./data/USHCN/" + 'pivot_1990_1993_thr4_normalize.csv'
+                    else:
+                        path_params['ex_filename'] = "./data/FrenchPiezo/" + 'dataset_2015_2021.csv'
+
+                    path_params["nan_percentage"] = nan_num
+                    prep_params['ts_params']['num_fut'] = num_fut
+
+                    ablation(path_params, prep_params, eval_params, model_params, res_dir, data_dir, model_dir)
+
+        else:
+            print("Single device, single parameter set.")
+            # subset = args.subset[0]
+            nan_num = args.nan_num[0]
+            num_fut = args.num_fut[0]
+
+            if 'ushcn' in args.file.lower():
+                # path_params["ex_filename"] = "./data/USHCN/" + subset
+                path_params["ex_filename"] = "./data/USHCN/" + 'pivot_1990_1993_thr4_normalize.csv'
+            else:
+                path_params['ex_filename'] = "./data/FrenchPiezo/" + 'dataset_2015_2021.csv'
+
+            path_params["nan_percentage"] = nan_num
+            prep_params['ts_params']['num_fut'] = num_fut
+
+            # model_params['lr'] = 1e-3
+            # model_params['epochs'] = 10
+
+            ablation(path_params, prep_params, eval_params, model_params, res_dir, data_dir, model_dir)
+
+    else:
+        print(f"Running on {socket.gethostname()}.")
+        with Manager() as manager:
+            print("manager, args.device", args.device)
+            gpu_locks = [manager.Lock() for _ in range(len(args.device))]
+            with ProcessPoolExecutor(max_workers=len(args.device), mp_context=get_context('spawn')) as executor:
+                futures_ = list()
+                # for subset in args.subset:
+                for nan_num in args.nan_num:
+                    for num_fut in args.num_fut:
+                        print("Launching ablation with params:")
+                        # print(f"subset: {subset}")
+                        print(f"nan_num: {nan_num}")
+                        print(f"num_fut: {num_fut}")
+
+                        if 'ushcn' in args.file.lower():
+                            # path_params["ex_filename"] = "./data/USHCN/" + subset
+                            path_params["ex_filename"] = "./data/USHCN/" + 'pivot_1990_1993_thr4_normalize.csv'
+                        else:
+                            path_params['ex_filename'] = "./data/FrenchPiezo/" + 'dataset_2015_2021.csv'
+
+                        path_params["nan_percentage"] = nan_num
+                        prep_params['ts_params']['num_fut'] = num_fut
+
+                        futures_.append(executor.submit(run_parallel_ablation, gpu_locks,
+                                                        path_params, prep_params, eval_params, model_params,
+                                                        res_dir, data_dir, model_dir))
+
+                done, not_done = futures.wait(futures_, return_when=futures.FIRST_EXCEPTION)
+
+                futures_exceptions = [future.exception() for future in done]
+                failed_futures = sum(map(lambda exception_: True if exception_ is not None else False,
+                                         futures_exceptions))
+
+                if failed_futures > 0:
+                    print("Could not run ablation tests. Thrown exceptions: ")
+
+                    for exception in futures_exceptions:
+                        print(exception)
+
+                    raise RuntimeError(f"Could not run ablation tests, {failed_futures} processes failed.")
+
+
 def normal_run():
     path_params, prep_params, eval_params, model_params = parse_params()
 
@@ -393,20 +577,23 @@ def normal_run():
 
                 try:
                     if 'ISTS' in models:
-                        if args.keep_nan:
+                        if args.embedder_ablation:
                             model_type = 'sttransformer'
                             model_params['model_type'] = model_type
-                            for experiment in range(4):
-                                print(f"Running keep_nan experiment {experiment + 1}.")
-                                if experiment == 3 and not args.keep_nan_fourth:
-                                    print("The fourth experiment is not implemented yet.")
-                                    continue
-                                else:
-                                    pass
+                            for experiment in args.ablation_experiments:
+                                print(f"Running embedder ablation experiment {experiment}.")
+                                print(embedder_ablation_experiments_map[experiment])
+                                print(model_params)
+                                print(prep_params)
+                                for key, params in embedder_ablation_experiments_map[experiment].items():
+                                    if key == 'model_params':
+                                        model_type = params['model_type']
+                                        model_params.update(params)
+                                    elif key in ('feat_params', 'exg_params'):
+                                        prep_params[key].update(params)
+
                                 checkpoint_dir = f'./output_{dataset_name}_{subset}_{nan_num}_{num_fut}_{model_type}'
-                                prep_params['feat_params'] = keep_nan_experiments_map[experiment]
-                                train_test_dict = data_step(path_params, prep_params, eval_params,
-                                                            keep_nan=False)
+                                train_test_dict = data_step(path_params, prep_params, eval_params, keep_nan=False)
 
                                 start_time = datetime.now()
                                 results = model_step(train_test_dict, model_params, checkpoint_dir)
@@ -414,10 +601,11 @@ def normal_run():
                                 print('Duration: {}'.format(end_time - start_time))
                                 print(results)
 
-                        else:
-                            train_test_dict = data_step(path_params, prep_params, eval_params,
-                                                        keep_nan=False)
+                        elif args.encoder_ablation:
+                            train_test_dict = data_step(path_params, prep_params, eval_params, keep_nan=False)
+
                             for model_type in args.model_type:
+                                print(f"Running encoder ablation experiment with model {model_type}.")
                                 model_params['model_type'] = model_type
                                 checkpoint_dir = f'./output_{dataset_name}_{subset}_{nan_num}_{num_fut}_{model_type}'
 
@@ -426,6 +614,17 @@ def normal_run():
                                 end_time = datetime.now()
                                 print('Duration: {}'.format(end_time - start_time))
                                 print(results)
+
+                        else:
+                            model_type = 'sttransformer'
+                            train_test_dict = data_step(path_params, prep_params, eval_params, keep_nan=False)
+                            checkpoint_dir = f'./output_{dataset_name}_{subset}_{nan_num}_{num_fut}_{model_type}'
+
+                            start_time = datetime.now()
+                            results = model_step(train_test_dict, model_params, checkpoint_dir)
+                            end_time = datetime.now()
+                            print('Duration: {}'.format(end_time - start_time))
+                            print(results)
 
                     else:  # CRU, mTAN, GRU-D
                         train_test_dict = data_step(path_params, prep_params, eval_params,
@@ -455,6 +654,9 @@ def normal_run():
 def main():
     if args.batch_run:
         batch_run()
+
+    elif args.ablation_run:
+        ablation_run()
 
     else:
         normal_run()
