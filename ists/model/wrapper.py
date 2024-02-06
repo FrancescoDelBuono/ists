@@ -10,6 +10,7 @@ from ..preprocessing import StandardScalerBatch, MinMaxScalerBatch
 from ..metrics import compute_metrics
 from .ablation import TransformerSpatial, TransformerTemporal, TransformerExogenous, TransformerTemporalSpatial, \
     TransformerSpatialExogenous, TransformerTemporalExogenous, STTnoEmbedding
+from .ablation import TSWithExogenousFeatures, STTWithSpatialExogenous, SEWithSpatialExogenous
 
 T = TypeVar('T', bound=tf.keras.Model)
 
@@ -59,6 +60,12 @@ def get_model(model_type: str, model_params) -> T:
         return TransformerTemporalExogenous(**model_params)
     elif model_type == 'se':
         return TransformerSpatialExogenous(**model_params)
+    elif model_type == 'ts_fe':
+        return TSWithExogenousFeatures(**model_params)
+    elif model_type == 'stt_se':
+        return STTWithSpatialExogenous(**model_params)
+    elif model_type == 'se_se':
+        return SEWithSpatialExogenous(**model_params)
     else:
         raise ValueError('Model {} is not supported, it must be "sttransformer"')
 

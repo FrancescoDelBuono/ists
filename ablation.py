@@ -1,13 +1,14 @@
 import os
 import pickle
 
+import numpy as np
 import pandas as pd
 
 from pipeline import data_step, model_step, parse_params, change_params
 
 
 def no_ablation(train_test_dict) -> dict:
-    train_test_dict['params']['model_params']['model_type'] = "sttransformer"
+    # train_test_dict['params']['model_params']['model_type'] = "sttransformer"
     return train_test_dict
 
 
@@ -49,6 +50,11 @@ def ablation_embedder_no_time_null(train_test_dict) -> dict:
     return train_test_dict
 
 
+def ablation_encoder_stt(train_test_dict) -> dict:
+    train_test_dict['params']['model_params']['model_type'] = "sttransformer"
+    return train_test_dict
+
+
 def ablation_encoder_t(train_test_dict) -> dict:
     train_test_dict['params']['model_params']['model_type'] = "t"
     return train_test_dict
@@ -79,6 +85,70 @@ def ablation_encoder_se(train_test_dict) -> dict:
     return train_test_dict
 
 
+def ablation_encoder_ts_fe(train_test_dict) -> dict:
+    # Models TS by concatenating exogenous features E in the feature dimension to T.
+    train_test_dict['params']['model_params']['model_type'] = "ts_fe"
+    return train_test_dict
+
+
+def ablation_encoder_ts_fe_nonull(train_test_dict) -> dict:
+    # Models TS by concatenating exogenous features E in the feature dimension to T,
+    # without null encoding.
+    train_test_dict = ablation_encoder_ts_fe(train_test_dict)
+    train_test_dict = ablation_embedder_no_null(train_test_dict)
+    return train_test_dict
+
+
+def ablation_encoder_ts_fe_nonull_notime(train_test_dict) -> dict:
+    # Models TS by concatenating exogenous features E in the feature dimension to T,
+    # without null and time encoding.
+    train_test_dict = ablation_encoder_ts_fe(train_test_dict)
+    train_test_dict = ablation_embedder_no_time_null(train_test_dict)
+    return train_test_dict
+
+
+def ablation_encoder_stt_se(train_test_dict) -> dict:
+    # Models STT by integrating exogenous E and T similarly to the S module.
+    train_test_dict['params']['model_params']['model_type'] = "stt_se"
+    return train_test_dict
+
+
+def ablation_encoder_stt_se_nonull(train_test_dict) -> dict:
+    # Models STT by integrating exogenous E and T similarly to the S module,
+    # without null encoding.
+    train_test_dict = ablation_encoder_stt_se(train_test_dict)
+    train_test_dict = ablation_embedder_no_null(train_test_dict)
+    return train_test_dict
+
+
+def ablation_encoder_se_se(train_test_dict) -> dict:
+    # Models SE by integrating exogenous E and T similarly to the S module.
+    train_test_dict['params']['model_params']['model_type'] = "se_se"
+    return train_test_dict
+
+
+def ablation_encoder_se_se_nonull(train_test_dict) -> dict:
+    # Models SE by integrating exogenous E and T similarly to the S module,
+    # without null encoding.
+    train_test_dict = ablation_encoder_se_se(train_test_dict)
+    train_test_dict = ablation_embedder_no_null(train_test_dict)
+    return train_test_dict
+
+
+def ablation_encoder_stt_mts_e(train_test_dict) -> dict:
+    # Models STT with multivariate inputs in E.
+    cond_x = [x == 0 for x in train_test_dict['x_feat_mask']]
+    for n in ['train', 'test']:
+        x = train_test_dict[f'x_{n}'][:, :, cond_x].copy()
+
+        train_test_dict[f'exg_{n}'] = np.concatenate([train_test_dict[f'exg_{n}'], x], axis=2)
+
+    x_feat_mask = [x for x in train_test_dict['x_feat_mask'] if x == 0]
+    train_test_dict['exg_feat_mask'] = train_test_dict['exg_feat_mask'] + x_feat_mask
+
+    return train_test_dict
+
+
 def ablation(
         path_params: dict,
         prep_params: dict,
@@ -89,6 +159,7 @@ def ablation(
         model_dir: str,
         ablation_embedder: bool = True,
         ablation_encoder: bool = True,
+        ablation_extra: dict = None
 ):
     subset = os.path.basename(path_params['ex_filename']).replace('subset_agg_', '').replace('.csv', '')
     nan_percentage = path_params['nan_percentage']
@@ -116,15 +187,16 @@ def ablation(
         }
         pickle.dump(train_test_dict, f)
 
+    selected_model = train_test_dict['params']['model_params']['model_type'][:3].upper()
     ablations_mapping = {
-        'STT': no_ablation,
+        selected_model: no_ablation,
     }
 
     if ablation_embedder:
         ablations_mapping.update({
-            'STT w/o time enc': ablation_embedder_no_time,
-            'STT w/o null enc': ablation_embedder_no_null,
-            'STT w/o time null enc': ablation_embedder_no_time_null,
+            f'{selected_model} w/o time enc': ablation_embedder_no_time,
+            f'{selected_model} w/o null enc': ablation_embedder_no_null,
+            f'{selected_model} w/o time null enc': ablation_embedder_no_time_null,
         })
 
     if ablation_encoder:
@@ -137,12 +209,22 @@ def ablation(
             'SE': ablation_encoder_se,
         })
 
+    if ablation_extra:
+        ablations_mapping.update(ablation_extra)
+
     for name, func in ablations_mapping.items():
-        print(f'\n{name}')
+        # Load data
         with open(pickle_path, "rb") as f:
             train_test_dict = pickle.load(f)
+
+        # Configure ablation test
         train_test_dict = func(train_test_dict)
+
+        # Exec ablation test
+        print(f"\n{name}: {train_test_dict['params']['model_params']['model_type']}")
         results[name] = model_step(train_test_dict, train_test_dict['params']['model_params'], checkpoint_path)
+
+        # Save results
         pd.DataFrame(results).T.to_csv(results_path, index=True)
 
     return pd.DataFrame(results).T
@@ -166,6 +248,12 @@ def main():
         model_dir=model_dir,
         ablation_embedder=True,
         ablation_encoder=True,
+        ablation_extra={
+            'TS_FE': ablation_encoder_ts_fe,
+            'STT_SE': ablation_encoder_stt_se,
+            'SE_SE': ablation_encoder_se_se,
+            'STT_MTS_E': ablation_encoder_stt_mts_e,
+        }
     )
 
     print('Hello World!')
