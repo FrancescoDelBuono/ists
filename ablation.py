@@ -1,11 +1,13 @@
+import multiprocessing
 import os
 import pickle
+import shutil
+import time
 
 import numpy as np
 import pandas as pd
 
-from pipeline import data_step, model_step, parse_params, change_params
-
+from pipeline import data_step, model_step
 
 def no_ablation(train_test_dict) -> dict:
     # train_test_dict['params']['model_params']['model_type'] = "sttransformer"
@@ -241,3 +243,108 @@ def ablation(
         pd.DataFrame(results).T.to_csv(results_path, index=True)
 
     return pd.DataFrame(results).T
+
+
+ablation_tests_mapping = {
+        'no_ablation': no_ablation,
+        'ablation_embedder_no_time': ablation_embedder_no_time,
+        'ablation_embedder_no_null': ablation_embedder_no_null,
+        'ablation_embedder_no_time_null': ablation_embedder_no_time_null,
+        'ablation_encoder_t': ablation_encoder_t,
+        'ablation_encoder_s': ablation_encoder_s,
+        'ablation_encoder_e': ablation_encoder_e,
+        'ablation_encoder_te': ablation_encoder_te,
+        'ablation_encoder_ts': ablation_encoder_ts,
+        'ablation_encoder_se': ablation_encoder_se,
+        'ablation_encoder_ts_fe': ablation_encoder_ts_fe,
+        # 'ablation_encoder_ts_fe_nonull': ablation_encoder_ts_fe_nonull,
+        # 'ablation_encoder_ts_fe_nonull_notime': ablation_encoder_ts_fe_nonull_notime,
+        'ablation_encoder_stt_se': ablation_encoder_stt_se,
+        # 'ablation_encoder_stt_se_nonull': ablation_encoder_stt_se_nonull,
+        'ablation_encoder_se_se': ablation_encoder_se_se,
+        # 'ablation_encoder_se_se_nonull': ablation_encoder_se_se_nonull,
+        'ablation_encoder_stt_mts_e': ablation_encoder_stt_mts_e,
+    }
+
+
+def single_test_ablation(
+        path_params: dict,
+        prep_params: dict,
+        eval_params: dict,
+        model_params: dict,
+        res_dir: str,
+        data_dir: str,
+        model_dir: str,
+        ablation_test: str,
+):
+
+    subset = os.path.basename(path_params['ex_filename']).replace('subset_agg_', '').replace('.csv', '')
+    nan_percentage = path_params['nan_percentage']
+    num_fut = prep_params['ts_params']['num_fut']
+
+    os.makedirs(res_dir, exist_ok=True)
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(model_dir, exist_ok=True)
+
+    out_name = f"{path_params['type']}_{subset}_nan{int(nan_percentage * 10)}_nf{num_fut}"
+    results_path = os.path.join(res_dir, f"{out_name}_{ablation_test}.csv")
+    pickle_path = os.path.join(data_dir, f"{out_name}.pickle")
+    checkpoint_path = os.path.join(model_dir, f"{out_name}_{os.getpid()}")
+
+    print(f"{os.getpid()}_{out_name}: Preparing to run ablation test:", ablation_test)
+    print(f"{os.getpid()}_{out_name}: Saving results in", results_path)
+    print(f"{os.getpid()}_{out_name}: Saving pickle in", pickle_path)
+    print(f"{os.getpid()}_{out_name}: Saving model in", checkpoint_path)
+
+    results = dict()
+
+    with open(pickle_path, "rb") as f:
+        train_test_dict = pickle.load(f)
+
+    # selected_model = train_test_dict['params']['model_params']['model_type'][:3].upper()
+
+    results_name_mapping = {
+        no_ablation: 'STT',
+        ablation_embedder_no_time: 'STT w/o time enc',
+        ablation_embedder_no_null: 'STT w/o null enc',
+        ablation_embedder_no_time_null: 'STT w/o time null enc',
+        ablation_encoder_t: 'T',
+        ablation_encoder_s: 'S',
+        ablation_encoder_e: 'E',
+        ablation_encoder_te: 'TE',
+        ablation_encoder_ts: 'TS',
+        ablation_encoder_se: 'SE',
+        ablation_encoder_ts_fe: 'TS_FE',
+        # ablation_encoder_ts_fe_nonull: 'TS_FE nonull',
+        # ablation_encoder_ts_fe_nonull_notime: 'TS_FE nonull notime',
+        ablation_encoder_stt_se: 'STT_SE',
+        # ablation_encoder_stt_se_nonull: 'STT_SE nonull',
+        ablation_encoder_se_se: 'SE_SE',
+        # ablation_encoder_se_se_nonull: 'SE_SE nonull',
+        ablation_encoder_stt_mts_e: 'STT_MTS_E',
+    }
+
+    # Configure ablation test
+    ablation_function = ablation_tests_mapping[ablation_test]
+    train_test_dict = ablation_function(train_test_dict)
+
+    # Exec ablation test
+    print(f"{os.getpid()}_{out_name}: Launching {ablation_test} using model "
+          f"{train_test_dict['params']['model_params']['model_type']}")
+    results_name = results_name_mapping[ablation_function]
+
+    """train_test_dict['x_train'] = train_test_dict['x_train'][:100, :, :]
+    train_test_dict['spt_train'] = [data[:100, :, :] for data in train_test_dict['spt_train']]
+    train_test_dict['exg_train'] = train_test_dict['exg_train'][:100, :, :]
+    train_test_dict['y_train'] = train_test_dict['y_train'][:100, :]"""
+
+    results[results_name] = model_step(train_test_dict, train_test_dict['params']['model_params'], checkpoint_path)
+    results_df = pd.DataFrame(results)
+
+    # Save results
+    results_df.to_csv(results_path, index=True)
+
+    if os.path.exists(checkpoint_path):
+        shutil.rmtree(checkpoint_path)
+
+    return results_df

@@ -1,14 +1,20 @@
+import multiprocessing
 import os
 import json
 import argparse
 import pickle
+import shutil
 import socket
+import sys
+import traceback
 from concurrent import futures
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from multiprocessing import Manager, get_context
 
-from ablation import ablation
+import pandas as pd
+
+from ablation import ablation, ablation_tests_mapping, single_test_ablation
 from ists.dataset.read import load_data
 from ists.preparation import prepare_data, prepare_train_test, filter_data
 from ists.preparation import define_feature_mask, get_list_null_max_size
@@ -47,6 +53,9 @@ parser.add_argument('--batch_run', action='store_true', default=False,
 parser.add_argument('--ablation_run', action='store_true', default=False,
                     help='Run the ablation experiments in parallel on multiple GPUs, in batch.')
 
+parser.add_argument('--single_test_ablation', action='store_true', default=False,
+                    help='Run the ablation experiments in parallel on multiple GPUs, one by one.')
+
 parser.add_argument('--dataset_folder', type=str, default=None,
                     help='Folder containing the datasets for batch run.')
 
@@ -62,14 +71,19 @@ parser.add_argument('--embedder_ablation', action='store_true', default=False,
 parser.add_argument('--ablation_experiments', nargs='+', type=int, default=[1, 2, 3, 4],
                     help='Experiment numbers to run for the embedder ablation, from 1 to 4.')
 
+parser.add_argument('--merge_only', action='store_true', default=False,
+                    help='Only merge the results of the ablation tests, without running them.')
+
+parser.add_argument('--force_execution', action='store_true', default=False,
+                    help='Force the execution of the baseline models, even if the results already exist.')
+
+parser.add_argument('--scaler', type=str, nargs='+', default=['standard'] * 3,
+                    help='Scaler to use for the baseline models.')
+
 args = parser.parse_args()
 
-"""config_datasets_map = {
-    'config/params_ushcn.json': 'data/pickles/ushcn',
-    'config/params_french.json': 'data/pickles/french',
-    'config/params_ushcn_baseline.json': 'data/pickles/ushcn_baseline',
-    'config/params_french_baseline.json': 'data/pickles/french_baseline'
-}"""
+if args.scaler[0].lower() == 'none':
+    args.scaler = None
 
 embedder_ablation_experiments_map = {
     1: {
@@ -126,11 +140,13 @@ embedder_ablation_experiments_map = {
 def parse_params(config_file: str = None):
     """ Parse input parameters. """
 
-    if args.device[0] != 'cpu':
+    if args.device != ['all'] and args.device[0] != 'cpu':
         gpus = tf.config.list_physical_devices('GPU')
         gpus_idx = [int(dev[-1]) for dev in args.device]
         selected_gpus = [gpu for i, gpu in enumerate(gpus) if i in gpus_idx]
         tf.config.set_visible_devices(selected_gpus, 'GPU')
+        for gpu in selected_gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
 
     if config_file is None:
         config_file = args.file
@@ -369,7 +385,7 @@ def batch_run():
 
             model_step(train_test_dict, model_params, checkpoint_dir)
 
-    else:
+    else:  # CRU, mTAN, GRU-D
         if args.device == ['all']:
             devices = 'all'
 
@@ -379,10 +395,23 @@ def batch_run():
         else:
             devices = args.device[0]
 
-        command = (f'python3 launch_experiments.py --model {" ".join(models)} --dataset '
-                   f'{os.path.abspath(dataset_folder)} '
+        python_interpreter_path = os.path.join(os.path.expanduser('~'),
+                                               '.virtualenvs', 'ists', 'bin', 'python')
+        command = (f'{python_interpreter_path} launch_experiments.py '
+                   f'--model {" ".join(models)} '
+                   f'--dataset {os.path.abspath(dataset_folder)} '
                    f'--device {devices} '
-                   f'{"--recycle_gpu" if args.recycle_gpu else ""}')
+                   f'{"--recycle_gpu" if args.recycle_gpu else ""} '
+                   f'{"--force_execution" if args.force_execution else ""} ')
+
+        if args.scaler:
+            if len(args.scaler) > 1:
+                command += f'--scaler {" ".join(args.scaler)}'
+            else:
+                command += f'--scaler {args.scaler[0]}'
+
+        else:
+            command += '--scaler None'
 
         print(command)
 
@@ -393,23 +422,7 @@ def batch_run():
 
 def run_parallel_ablation(gpu_locks: list, path_params: dict, prep_params: dict, eval_params: dict,
                           model_params: dict, res_dir: str, data_dir: str, model_dir: str):
-
-    device = 'cpu'
-    device_idx = -1
-
-    if args.device == ['all']:
-        args.device = ['cuda:{}'.format(i) for i in range(len(tf.config.list_physical_devices('GPU')))]
-
-    for i, lock in enumerate(gpu_locks):
-        if lock.acquire(blocking=False):
-            device = args.device[i]
-            device_idx = i
-            break
-
-    print(f"Running on device {device}")
-    gpus = tf.config.list_physical_devices('GPU')
-    gpu_idx = int(device[-1])
-    tf.config.set_visible_devices(gpus[gpu_idx], 'GPU')
+    device_idx = set_computing_device(gpu_locks)
 
     try:
         ablation(
@@ -425,11 +438,159 @@ def run_parallel_ablation(gpu_locks: list, path_params: dict, prep_params: dict,
         )
 
     except Exception as e:
-        print(e)
+        traceback.print_exc(file=sys.stderr)
         raise e
 
     finally:  # this is always executed if an exception is raised or not
         gpu_locks[device_idx].release()
+
+
+def run_parallel_single_test_ablation(gpu_locks: list[multiprocessing.RLock],
+                                      dataset_locks: dict[str: multiprocessing.RLock],
+                                      ablation_test: str,
+                                      path_params: dict, prep_params: dict, eval_params: dict,
+                                      model_params: dict, res_dir: str, data_dir: str, model_dir: str):
+    device_idx = set_computing_device(gpu_locks)
+
+    subset = (os.path.basename(path_params['ex_filename'])
+              .replace('subset_agg_', '')
+              .replace('.csv', ''))
+
+    nan_percentage = path_params['nan_percentage']
+    num_fut = prep_params['ts_params']['num_fut']
+
+    os.makedirs(data_dir, exist_ok=True)
+
+    out_name = f"{path_params['type']}_{subset}_nan{int(nan_percentage * 10)}_nf{num_fut}"
+    dataset_name = f"{out_name}.pickle"
+    pickle_path = os.path.join(data_dir, dataset_name)
+
+    with dataset_locks[dataset_name]:
+        if not os.path.exists(pickle_path):
+            print("Process", os.getpid(), "is preparing dataset", dataset_name, flush=True)
+            train_test_dict = data_step(path_params, prep_params, eval_params, keep_nan=False)
+
+            with open(pickle_path, "wb") as f:
+                train_test_dict['params'] = {
+                    'path_params': path_params,
+                    'prep_params': prep_params,
+                    'eval_params': eval_params,
+                    'model_params': model_params,
+                }
+                pickle.dump(train_test_dict, f)
+
+            del train_test_dict
+
+    print(f"{os.getpid()}: Invoking single test ablation with test {ablation_test}.")
+
+    try:
+        single_test_ablation(path_params=path_params, prep_params=prep_params, eval_params=eval_params,
+                             model_params=model_params, res_dir=res_dir, data_dir=data_dir, model_dir=model_dir,
+                             ablation_test=ablation_test)
+
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        raise e
+
+    finally:  # this is always executed if an exception is raised or not
+        gpu_locks[device_idx].release()
+        checkpoint_path = os.path.join(model_dir, f"{out_name}_{os.getpid()}")
+        if os.path.exists(checkpoint_path):
+            shutil.rmtree(checkpoint_path)
+
+
+def set_computing_device(gpu_locks):
+    device = 'cpu'
+    device_idx = -1
+    if args.device == ['all']:
+        args.device = ['cuda:{}'.format(i) for i in range(len(tf.config.list_physical_devices('GPU')))]
+    for i, lock in enumerate(gpu_locks):
+        if lock.acquire(blocking=False):
+            device = args.device[i]
+            device_idx = i
+            break
+    print(f"{os.getpid()}: Running on device {device}")
+    gpus = tf.config.list_physical_devices('GPU')
+    gpu_idx = int(device[-1])
+    try:
+        tf.config.set_visible_devices(gpus[gpu_idx], 'GPU')
+    except RuntimeError as re:
+        print(f"Could not set visible devices on device {device}.")
+        print(re)
+        raise re
+
+    # TODO: this could cause errors if the device is already initialized for some reason. Investigate.
+    try:
+        tf.config.experimental.set_memory_growth(gpus[gpu_idx], True)
+    except RuntimeError as re:
+        print(f"Could not set memory growth on device {device}.")
+        print(re)
+        print("Continuing.")
+
+    return device_idx
+
+
+def schedule_single_test_ablation(path_params: dict, prep_params: dict, eval_params: dict, model_params: dict,
+                                  res_dir: str, data_dir: str, model_dir: str):
+    subset = (os.path.basename(path_params['ex_filename'])
+              .replace('subset_agg_', '')
+              .replace('.csv', ''))
+
+    results_filenames = [f"{path_params['type']}_{subset}_nan{int(nan_num * 10)}_nf{num_fut}"
+                         for nan_num in args.nan_num for num_fut in args.num_fut]
+
+    with Manager() as manager:
+        gpu_locks = manager.list([manager.RLock() for _ in range(len(args.device))])
+        dataset_locks = manager.dict({results_filename + '.pickle': manager.RLock()
+                                      for results_filename in results_filenames})
+
+        four_hours = 14400  # seconds
+
+        for nan_num in args.nan_num:
+            for num_fut in args.num_fut:
+                # initialize the ProcessPool each time as already initialized devices cannot be modified
+                # in TensorFlow. This joins the processes and spawns new ones, avoiding the problem.
+                with ProcessPoolExecutor(max_workers=len(args.device),
+                                         mp_context=get_context('spawn')) as executor:
+                    futures_ = list()
+                    # print(f"nan_num: {nan_num}")
+                    # print(f"num_fut: {num_fut}")
+
+                    path_params["nan_percentage"] = nan_num
+                    prep_params['ts_params']['num_fut'] = num_fut
+
+                    results_filename = (f"{path_params['type']}_{subset}"
+                                        f"_nan{int(nan_num * 10)}_nf{num_fut}.csv")
+                    dataset_filename = (f"{path_params['type']}_{subset}"
+                                        f"_nan{int(nan_num * 10)}_nf{num_fut}.pickle")
+
+                    print("Launching single test ablation processes on dataset:", dataset_filename)
+                    print("Saving results in:", results_filename)
+
+                    for test in ablation_tests_mapping.keys():
+                        print(f"Scheduling {test}")
+
+                        futures_.append(executor.submit(run_parallel_single_test_ablation,
+                                                        gpu_locks, dataset_locks, test,
+                                                        path_params, prep_params, eval_params, model_params,
+                                                        res_dir, data_dir, model_dir))
+
+                done, not_done = futures.wait(futures_, return_when=futures.FIRST_EXCEPTION, timeout=four_hours)
+
+                futures_exceptions = [future.exception() for future in done]
+                failed_futures = sum(map(lambda exception_: True if exception_ is not None else False,
+                                         futures_exceptions))
+
+                if failed_futures > 0:
+                    print("Could not run ablation tests. Thrown exceptions: ")
+
+                    for exception in futures_exceptions:
+                        print(exception)
+
+                    print("traceback.print_exc()")
+                    traceback.print_exc(file=sys.stderr)
+
+                    raise RuntimeError(f"Could not run ablation tests, {failed_futures} processes failed.")
 
 
 def ablation_run():
@@ -445,57 +606,93 @@ def ablation_run():
 
     # if 'gnode01' in socket.gethostname():
     # print("Running on ARIES.")
-    if len(args.device) == 1:
-        # if len(args.subset) > 1 or len(args.nan_num) > 1 or len(args.num_fut) > 1:
-        if len(args.nan_num) > 1 or len(args.num_fut) > 1:
-            print("Single device, multiple parameter sets.")
+    if args.single_test_ablation:
+        results_filenames = list()
+        results_files = dict()
 
-            # for subset in args.subset:
-            for nan_num in args.nan_num:
-                for num_fut in args.num_fut:
-                    print("Launching ablation with params:")
-                    # print(f"subset: {subset}")
-                    print(f"nan_num: {nan_num}")
-                    print(f"num_fut: {num_fut}")
+        if args.subset[0] != 'None':
+            for subset in args.subset:
+                if 'ushcn' in args.file.lower():
+                    path_params["ex_filename"] = "./data/USHCN/" + subset
+                else:
+                    path_params['ex_filename'] = "./data/FrenchPiezo/" + subset
 
-                    if 'ushcn' in args.file.lower():
-                        # path_params["ex_filename"] = "./data/USHCN/" + subset
-                        path_params["ex_filename"] = "./data/USHCN/" + 'pivot_1990_1993_thr4_normalize.csv'
-                    else:
-                        path_params['ex_filename'] = "./data/FrenchPiezo/" + 'dataset_2015_2021.csv'
+                subset = (os.path.basename(path_params['ex_filename'])
+                          .replace('subset_agg_', '')
+                          .replace('.csv', ''))
 
-                    path_params["nan_percentage"] = nan_num
-                    prep_params['ts_params']['num_fut'] = num_fut
+                subset_results_filenames = [f"{path_params['type']}_{subset}_nan{int(nan_num * 10)}_nf{num_fut}"
+                                            for nan_num in args.nan_num for num_fut in args.num_fut]
 
-                    ablation(path_params, prep_params, eval_params, model_params, res_dir, data_dir, model_dir)
+                subset_results_files = {results_filename + '.csv': ['_'.join([results_filename, ablation_test]) + '.csv'
+                                                                    for ablation_test in ablation_tests_mapping.keys()]
+                                        for results_filename in subset_results_filenames
+                                        }
+
+                results_filenames += subset_results_filenames
+                results_files.update(subset_results_files)
+
+                if not os.path.exists(path_params['ex_filename']):
+                    raise FileNotFoundError(f"File {path_params['ex_filename']} does not exist.")
+
+                if not args.merge_only:
+                    schedule_single_test_ablation(path_params, prep_params, eval_params, model_params,
+                                                  res_dir, data_dir, model_dir)
 
         else:
-            print("Single device, single parameter set.")
-            # subset = args.subset[0]
-            nan_num = args.nan_num[0]
-            num_fut = args.num_fut[0]
-
             if 'ushcn' in args.file.lower():
                 # path_params["ex_filename"] = "./data/USHCN/" + subset
                 path_params["ex_filename"] = "./data/USHCN/" + 'pivot_1990_1993_thr4_normalize.csv'
             else:
                 path_params['ex_filename'] = "./data/FrenchPiezo/" + 'dataset_2015_2021.csv'
 
-            path_params["nan_percentage"] = nan_num
-            prep_params['ts_params']['num_fut'] = num_fut
+            if not args.merge_only:
+                schedule_single_test_ablation(path_params, prep_params, eval_params, model_params,
+                                              res_dir, data_dir, model_dir)
 
-            # model_params['lr'] = 1e-3
-            # model_params['epochs'] = 10
+            subset = (os.path.basename(path_params['ex_filename'])
+                      .replace('subset_agg_', '')
+                      .replace('.csv', ''))
 
-            ablation(path_params, prep_params, eval_params, model_params, res_dir, data_dir, model_dir)
+            results_filenames = [f"{path_params['type']}_{subset}_nan{int(nan_num * 10)}_nf{num_fut}"
+                                 for nan_num in args.nan_num for num_fut in args.num_fut]
+
+            results_files = {results_filename + '.csv': ['_'.join([results_filename, ablation_test]) + '.csv'
+                                                         for ablation_test in ablation_tests_mapping.keys()]
+                             for results_filename in results_filenames
+                             }
+
+        print("All ablation tests ran successfully. Merging results.")
+
+        for results_filename, test_results_filenames in results_files.items():
+            print("Merging results for", results_filename)
+            print("res_dir", res_dir)
+            print("results_filename", results_filename)
+            complete_results_path = os.path.join(res_dir, results_filename)
+            print("complete_results_path", complete_results_path)
+            if os.path.exists(complete_results_path):
+                results_df = pd.read_csv(complete_results_path, index_col=0)
+            else:
+                results_df = pd.DataFrame()
+            for test_results_filename in test_results_filenames:
+                print("test_results_filename", test_results_filename)
+                test_results_path = os.path.join(res_dir, test_results_filename)
+                print("test_results_path", test_results_path)
+
+                if not os.path.exists(test_results_path):
+                    print("WARNING: File", test_results_filename, "does not exist. Skipping.", file=sys.stderr)
+                    continue
+                test_results_df = pd.read_csv(test_results_path, index_col=0)
+                results_df = pd.concat([results_df, test_results_df], axis=1)
+
+            results_df.T.to_csv(os.path.join(res_dir, results_filename), index=True)
 
     else:
-        print(f"Running on {socket.gethostname()}.")
-        with Manager() as manager:
-            print("manager, args.device", args.device)
-            gpu_locks = [manager.Lock() for _ in range(len(args.device))]
-            with ProcessPoolExecutor(max_workers=len(args.device), mp_context=get_context('spawn')) as executor:
-                futures_ = list()
+        if len(args.device) == 1:
+            # if len(args.subset) > 1 or len(args.nan_num) > 1 or len(args.num_fut) > 1:
+            if len(args.nan_num) > 1 or len(args.num_fut) > 1:
+                print("Single device, multiple parameter sets.")
+
                 # for subset in args.subset:
                 for nan_num in args.nan_num:
                     for num_fut in args.num_fut:
@@ -513,23 +710,111 @@ def ablation_run():
                         path_params["nan_percentage"] = nan_num
                         prep_params['ts_params']['num_fut'] = num_fut
 
-                        futures_.append(executor.submit(run_parallel_ablation, gpu_locks,
-                                                        path_params, prep_params, eval_params, model_params,
-                                                        res_dir, data_dir, model_dir))
+                        ablation(path_params, prep_params, eval_params, model_params, res_dir, data_dir, model_dir)
 
-                done, not_done = futures.wait(futures_, return_when=futures.FIRST_EXCEPTION)
+            else:
+                print("Single device, single parameter set.")
+                # subset = args.subset[0]
+                nan_num = args.nan_num[0]
+                num_fut = args.num_fut[0]
 
-                futures_exceptions = [future.exception() for future in done]
-                failed_futures = sum(map(lambda exception_: True if exception_ is not None else False,
-                                         futures_exceptions))
+                if 'ushcn' in args.file.lower():
+                    # path_params["ex_filename"] = "./data/USHCN/" + subset
+                    path_params["ex_filename"] = "./data/USHCN/" + 'pivot_1990_1993_thr4_normalize.csv'
+                else:
+                    path_params['ex_filename'] = "./data/FrenchPiezo/" + 'dataset_2015_2021.csv'
 
-                if failed_futures > 0:
-                    print("Could not run ablation tests. Thrown exceptions: ")
+                path_params["nan_percentage"] = nan_num
+                prep_params['ts_params']['num_fut'] = num_fut
 
-                    for exception in futures_exceptions:
-                        print(exception)
+                # model_params['lr'] = 1e-3
+                # model_params['epochs'] = 10
 
-                    raise RuntimeError(f"Could not run ablation tests, {failed_futures} processes failed.")
+                ablation(path_params, prep_params, eval_params, model_params, res_dir, data_dir, model_dir)
+
+        else:
+            print(f"Running on {socket.gethostname()}.")
+            with Manager() as manager:
+                print("manager, args.device", args.device)
+                gpu_locks = [manager.Lock() for _ in range(len(args.device))]
+                with ProcessPoolExecutor(max_workers=len(args.device), mp_context=get_context('spawn')) as executor:
+                    futures_ = list()
+                    # for subset in args.subset:
+                    for nan_num in args.nan_num:
+                        for num_fut in args.num_fut:
+                            print("Launching ablation with params:")
+                            # print(f"subset: {subset}")
+                            print(f"nan_num: {nan_num}")
+                            print(f"num_fut: {num_fut}")
+
+                            if 'ushcn' in args.file.lower():
+                                # path_params["ex_filename"] = "./data/USHCN/" + subset
+                                path_params["ex_filename"] = "./data/USHCN/" + 'pivot_1990_1993_thr4_normalize.csv'
+                            else:
+                                path_params['ex_filename'] = "./data/FrenchPiezo/" + 'dataset_2015_2021.csv'
+
+                            path_params["nan_percentage"] = nan_num
+                            prep_params['ts_params']['num_fut'] = num_fut
+
+                            futures_.append(executor.submit(run_parallel_ablation, gpu_locks,
+                                                            path_params, prep_params, eval_params, model_params,
+                                                            res_dir, data_dir, model_dir))
+
+                    done, not_done = futures.wait(futures_, return_when=futures.FIRST_EXCEPTION)
+
+                    futures_exceptions = [future.exception() for future in done]
+                    failed_futures = sum(map(lambda exception_: True if exception_ is not None else False,
+                                             futures_exceptions))
+
+                    if failed_futures > 0:
+                        print("Could not run ablation tests. Thrown exceptions: ")
+
+                        for exception in futures_exceptions:
+                            print(exception)
+
+                        raise RuntimeError(f"Could not run ablation tests, {failed_futures} processes failed.")
+
+
+def no_subset_run():
+    path_params, prep_params, eval_params, model_params = parse_params()
+
+    if 'ushcn' in args.file.lower():
+        args.subset = ['pivot_1990_1993_thr4_normalize.csv']
+    else:
+        args.subset = ['dataset_2015_2021.csv']
+
+    subset = args.subset[0]
+
+    datasets_folder = os.path.join(os.getcwd(), 'output', 'pickle',
+                                   'ushcn' if 'ushcn' in args.file.lower() else 'french')
+
+    os.makedirs(datasets_folder, exist_ok=True)
+
+    print("Generating datasets: ")
+    for num_fut in args.num_fut:
+        for nan_num in args.nan_num:
+            dataset_name = (f"{path_params['type']}_"
+                            f"{subset.replace('subset_agg_', '').replace('.csv', '')}_"
+                            f"nan{int(nan_num * 10)}_"
+                            f"nf{num_fut}")
+
+            print(f"Dataset: {dataset_name}")
+
+            path_params["nan_percentage"] = nan_num
+            prep_params['ts_params']['num_fut'] = num_fut
+
+            if dataset_name + '.pickle' in os.listdir(datasets_folder):
+                print(f"Dataset {dataset_name} already exists. Skipping.")
+                continue
+
+            train_test_dict = data_step(path_params, prep_params, eval_params, keep_nan=True)
+
+            with open(os.path.join(datasets_folder, f'{dataset_name}.pickle'), 'wb') as f:
+                pickle.dump(train_test_dict, f)
+
+    print(f"Datasets generated. Launching batch run on {', '.join(args.model)} using devices {', '.join(args.device)}.")
+    args.dataset_folder = datasets_folder
+    batch_run()
 
 
 def normal_run():
@@ -627,22 +912,37 @@ def normal_run():
                             print(results)
 
                     else:  # CRU, mTAN, GRU-D
-                        train_test_dict = data_step(path_params, prep_params, eval_params,
-                                                    keep_nan=True)
+                        train_test_dict = data_step(path_params, prep_params, eval_params, keep_nan=True)
 
                         dataset_file_path = os.path.join(tmp_datasets_path, f'{dataset_name}.pickle')
                         with open(dataset_file_path, 'wb') as f:
                             pickle.dump(train_test_dict, f)
 
-                        command = (f'python3 launch_experiments.py --model {" ".join(models)} --dataset '
-                                   f'{os.path.abspath(dataset_file_path)} '
-                                   f'--device {" ".join(args.device)}')
+                        python_interpreter_path = os.path.join(os.path.expanduser('~'),
+                                                               '.virtualenvs', 'ists', 'bin', 'python')
+                        command = (f'{python_interpreter_path} launch_experiments.py '
+                                   f'--model {" ".join(models)} '
+                                   f'--dataset {os.path.abspath(dataset_file_path)} '
+                                   f'--device {" ".join(args.device)} '
+                                   f'{"--force_execution" if args.force_execution else ""} ')
+
+                        if args.scaler:
+                            if len(args.scaler) > 1:
+                                command += f'--scaler {" ".join(args.scaler)}'
+                            else:
+                                command += f'--scaler {args.scaler[0]}'
+                        else:
+                            command += '--scaler None'
 
                         print(command)
+                        try:
+                            os.system(command)
+                        except Exception as e:
+                            print(f"Dataset {dataset_name} failed.")
+                            raise e
 
-                        os.system(command)
-
-                        os.system(f"rm {os.path.join(tmp_datasets_path, dataset_name)}*")
+                        finally:
+                            os.system(f"rm {os.path.join(tmp_datasets_path, dataset_name)}*")
 
                 except Exception as e:
                     print(f"Dataset {dataset_name} failed: {e}")
@@ -655,8 +955,11 @@ def main():
     if args.batch_run:
         batch_run()
 
-    elif args.ablation_run:
+    elif args.ablation_run or args.single_test_ablation:
         ablation_run()
+
+    elif args.subset == ['None']:
+        no_subset_run()
 
     else:
         normal_run()

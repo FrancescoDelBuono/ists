@@ -20,27 +20,43 @@ parser.add_argument('--num_workers', type=str, default=None,
 parser.add_argument('--recycle_gpu', action='store_true', default=False,
                     help="Run multiple models on the same GPU to exploit the available VRAM.")
 
+parser.add_argument('--force_execution', action='store_true', default=False,
+                    help="Force the execution of the models even if the results are already present.")
+
+parser.add_argument('--scaler', type=str, default=['standard'], nargs='+',
+                    help="List of scalers to use for preprocessing the data, one for each model.")
+
 hostname = socket.gethostname()
 
 if 'gnode' in hostname or 'cnode' in hostname or 'fnode' in hostname:  # ARIES
     home_path = '/unimore_home/gguiduzzi'
+    models_path = ''
 
 elif 'fpdgx1' in socket.gethostname():  # LYRA
     home_path = '/trafair/gguiduzzi'
+    models_path = ''
 
 else:  # SPARC20
     home_path = '/home/giacomo.guiduzzi'
+    models_path = os.path.join(home_path, 'softlab_sharepoint', 'Projects', 'Adbpo', 'Models')
 
-interpreters = {
-    'GRU-D': f'{home_path}/.virtualenvs/GRU-D/bin/python',
-    'CRU': f'{home_path}/.virtualenvs/cru_sm80/bin/python',
-    'mTAN': f'{home_path}/.virtualenvs/mtan_sm80/bin/python'
-}
+if 'sparc20' in hostname:
+    interpreters = {
+        'GRU-D': os.path.join(home_path, '.virtualenvs', 'GRU-D', 'bin', 'python'),
+        'CRU': os.path.join(home_path, '.virtualenvs', 'Continuous-Recurrent-Units', 'bin', 'python'),
+        'mTAN': os.path.join(home_path, '.virtualenvs', 'mTAN', 'bin', 'python')
+    }
+else:
+    interpreters = {
+        'GRU-D': os.path.join(home_path, '.virtualenvs', 'GRU-D', 'bin', 'python'),
+        'CRU': os.path.join(home_path, '.virtualenvs', 'cru_sm80', 'bin', 'python'),
+        'mTAN': os.path.join(home_path, '.virtualenvs', 'mtan_sm80', 'bin', 'python')
+    }
 
 wdirs = {
-    'GRU-D': f'{home_path}/GRU-D',
-    'CRU': f'{home_path}/Continuous-Recurrent-Units',
-    'mTAN': f'{home_path}/mTAN'
+    'GRU-D': os.path.join(home_path, models_path, 'GRU-D'),
+    'CRU': os.path.join(home_path, models_path, 'Continuous-Recurrent-Units'),
+    'mTAN': os.path.join(home_path, models_path, 'mTAN'),
 }
 
 scripts = {
@@ -50,12 +66,12 @@ scripts = {
 }
 
 parameters = {
-    'GRU-D': 'fdb {} 2>&1 | tee grud_output_{}.txt',
+    'GRU-D': 'fdb {} {} 2>&1 | tee grud_output_{}.txt',
     'CRU': '--dataset fdb --task forecast -lsd 30 --epochs 10 --sample-rate 0.5 --filename {} --batch-size 64 '
-           '--device {} 2>&1 | tee cru_output_{}.txt',
+           '--device {} {} 2>&1 | tee cru_output_{}.txt',
     'mTAN': '--alpha 100 --niters 10 --lr 0.0001 --batch-size 64 --rec-hidden 256 --gen-hidden 50 --latent-dim 20 '
             '--enc mtan_rnn --dec mtan_rnn --save 1 --norm --kl --learn-emb --k-iwae 1 --dataset fdb '
-            '--filename {} --device {} --normalize_tp 2>&1 | tee mtan_output_{}.txt'
+            '--filename {} --device {} --normalize_tp {} 2>&1 | tee mtan_output_{}.txt'
 }
 
 vram_usage = {
@@ -66,8 +82,23 @@ vram_usage = {
 
 args = parser.parse_args()
 
+if args.scaler[0].lower() == 'none':
+    args.scaler = None
 
-def launch_model(model: str, dataset: str, device_list: dict[str: multiprocessing.Lock],
+if args.scaler:
+    if len(args.scaler) == len(args.model):
+        scaler_map = {model: scaler for model, scaler in zip(args.model, args.scaler)}
+    elif len(args.scaler) == 1:
+        scaler_map = {model: args.scaler[0] for model in args.model}
+    else:
+        raise ValueError(f"Invalid number of scalers specified: "
+                         f"{len(args.scaler)} scalers for {len(args.model)} models.")
+
+else:
+    scaler_map = {model: 'None' for model in args.model}
+
+
+def launch_model(model: str, dataset: str, device_list: dict[str: multiprocessing.RLock],
                  recycle_gpu: bool = False):
     device = 'cpu'
     acquired_lock = None
@@ -117,23 +148,37 @@ def launch_model(model: str, dataset: str, device_list: dict[str: multiprocessin
     script = scripts[model]
 
     if model == 'GRU-D':
-        cmd_parameters = parameters[model].format(dataset, dataset_name)
+        cmd_parameters = parameters[model].format(dataset,
+                                                  f'--scaler {scaler_map[model]}',
+                                                  dataset_name)
     elif model == 'CRU':
-        cmd_parameters = parameters[model].format(dataset, device, dataset_name)
+        cmd_parameters = parameters[model].format(dataset,
+                                                  device,
+                                                  f'--scaler {scaler_map[model]}',
+                                                  dataset_name)
     elif model == 'mTAN':
-        cmd_parameters = parameters[model].format(dataset, device, dataset_name)
+        cmd_parameters = parameters[model].format(dataset,
+                                                  device,
+                                                  f'--scaler {scaler_map[model]}',
+                                                  dataset_name)
     else:
         raise RuntimeError(f'Unknown model {model}')
 
     # command = interpreter + ' ' + wdir + '/' + script + ' ' + parameter
     command = ' '.join([interpreter, script, cmd_parameters])
 
-    print(f'{os.getpid()}: Launching {model} using {dataset_name} on {device}')
-    os.system(command)
-    print(f'{os.getpid()}: Finished {model} using {dataset_name} on {device}')
+    try:
+        print(f'{os.getpid()}: Launching {model} using {dataset_name} on {device}')
+        os.system(command)
+        print(f'{os.getpid()}: Finished {model} using {dataset_name} on {device}')
 
-    if acquired_lock is not None:
-        acquired_lock.release()
+    except Exception as e:
+        print(f"Error while running {model} on {dataset_name} on {device}.")
+        raise e
+
+    finally:
+        if acquired_lock:
+            acquired_lock.release()
 
 
 def check_launch_model(model, dataset):
@@ -172,19 +217,25 @@ def check_launch_model(model, dataset):
                                 last_lines[1].startswith('Train MSE:') and \
                                 last_lines[2].startswith('Train MAE:') and last_lines[3].startswith('Duration:')
 
-                            if crashed or completed:
-                                print(f"Log file {file}, last lines:")
-                                print(last_lines)
+                            print(f"Log file {file}, last lines:")
+                            print(last_lines)
+
+                            if completed:
                                 print("Skipping execution.")
                                 launch = False
 
-                                break
+                            else:
+                                print("Model crashed, re-executing.")
+                                launch = True
 
-                        # TODO: to implement if necessary
+                            break
+
                         elif model == 'GRU-D':
+                            # TODO: implement
                             pass
 
                         elif model == 'mTAN':
+                            # TODO: implement
                             pass
 
     if launch:
@@ -232,10 +283,10 @@ def main():
                     else:
                         max_workers = multiprocessing.cpu_count() // 4
 
-                    devices = manager.dict({f'cpu:{idx}': manager.Lock() for idx in range(max_workers)})
+                    devices = manager.dict({f'cpu:{idx}': manager.RLock() for idx in range(max_workers)})
 
                 else:
-                    devices = manager.dict({f'cuda:{idx}': manager.Lock() for idx in range(torch.cuda.device_count())})
+                    devices = manager.dict({f'cuda:{idx}': manager.RLock() for idx in range(torch.cuda.device_count())})
 
             elif args.recycle_gpu:
                 if len(models) > 1:
@@ -254,17 +305,17 @@ def main():
                 for cuda_dev in args.device:
                     locks = manager.list()
                     for _ in range(runnable_models):
-                        locks.append(manager.Lock())
+                        locks.append(manager.RLock())
 
                     devices[cuda_dev] = locks
-                    # devices = manager.dict({cuda_dev: [manager.Lock()] * runnable_models
+                    # devices = manager.dict({cuda_dev: [manager.RLock()] * runnable_models
                     #                         for cuda_dev in args.device})
 
                 max_workers = len(devices) * runnable_models if models != ['GRU-D'] \
                     else multiprocessing.cpu_count() // 4
 
             else:
-                devices = manager.dict({cuda_dev: manager.Lock() for cuda_dev in args.device})
+                devices = manager.dict({cuda_dev: manager.RLock() for cuda_dev in args.device})
 
             if not args.recycle_gpu:
                 if models != ['GRU-D']:
@@ -285,9 +336,12 @@ def main():
             else:
                 max_workers = int(args.num_workers)
 
-            devices = manager.dict({cpu_core: manager.Lock()} for cpu_core in range(max_workers))
+            devices = manager.dict({cpu_core: manager.RLock()} for cpu_core in range(max_workers))
 
         crashed_runs = successful_runs = 0
+
+        print("Available devices: ", devices.keys())
+        print("Num workers: ", max_workers)
 
         # TODO: it appears that the number of processes able to run is somehow limited by the Manager. Having
         #  max_workers > len(devices) still causes the program to run with at most len(devices) processes.
@@ -296,7 +350,11 @@ def main():
                 for model in models:
                     futures_ = list()
                     if batch_run:
-                        launch, completed = check_launch_model(model, dataset)
+                        if args.force_execution:
+                            launch = True
+                            completed = False
+                        else:
+                            launch, completed = check_launch_model(model, dataset)
 
                         if completed:
                             successful_runs += 1
@@ -308,9 +366,13 @@ def main():
 
             if isinstance(datasets, list):
                 print("Total datasets found: ", len(datasets))
-                print("Recap of already computed datasets:")
-                print(f"Total successful runs: {successful_runs}")
-                print(f"Total crashed or yet to execute runs: {crashed_runs}", flush=True)
+                if not args.force_execution:
+                    print("Recap of already computed datasets:")
+                    print(f"Total successful runs: {successful_runs}")
+                    print(f"Total crashed or yet to execute runs: {crashed_runs}", flush=True)
+
+                else:
+                    print("Forcing execution on all datasets.")
 
             print("Starting experiments.", flush=True)
             done, not_done = futures.wait(futures_, return_when=futures.ALL_COMPLETED)

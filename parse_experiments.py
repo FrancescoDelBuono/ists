@@ -1,4 +1,5 @@
 import argparse
+import collections
 import os
 
 import numpy as np
@@ -23,6 +24,9 @@ parser.add_argument('-me', '--metric', type=str, default='Test_MAE',
 
 parser.add_argument('-M', '--merge', action='store_true', default=False,
                     help="Merge the results of ISTS and the other models in a single dataframe.")
+
+parser.add_argument('-MA', '--merge_ablation', action='store_true', default=False,
+                    help="Merge the results of the ablation experiments in a single dataframe.")
 
 parser.add_argument('-fo', '--fill_old', action='store_true', default=False,
                     help="Fill the table with old results first, then add the new ones.")
@@ -56,11 +60,11 @@ file_start = {
 }
 
 if args.encoder_ablation:
-    models = ['t', 's', 'e', 'ts', 'te', 'se']
+    models = ['T', 'S', 'E', 'TS', 'TE', 'SE', 'TS_FE', 'STT_SE', 'SE_SE', 'STT_MTS_E']
     args.models = ['ISTS']
 
 elif args.embedder_ablation:
-    models = ['w/o time enc', 'w/o null enc', 'w/o time null enc', 'w/o STT Encoder']
+    models = ['STT w/o time enc', 'STT w/o null enc', 'STT w/o time null enc']
     args.models = ['ISTS']
 
 else:
@@ -72,6 +76,9 @@ emb_abl_exp_mapping = {
     '3': 'w/o time null enc',
     '4': 'w/o STT Encoder'
 }
+
+ablation_experiment_models = ['STT', 'STT w/o time enc', 'STT w/o null enc', 'STT w/o time null enc',
+                              'T', 'S', 'E', 'TS', 'TE', 'SE', 'TS_FE', 'STT_SE', 'SE_SE', 'STT_MTS_E']
 
 # TODO: implement time parse
 # TODO: implement new ablation data (csv) merge
@@ -118,8 +125,13 @@ def parse_ists(file):
             num_fut = info.split('=')[-1]
         elif 'nan_num' in info:
             nan_num = int(float(info.split('=')[-1]) * 10)
-        elif 'subset' in info:
-            subset = info.split('=')[-1].split('.csv')[0].split('subset_agg_')[-1]
+        elif 'subset' in info or 'dataset_2015_2021' in info or 'pivot_1990' in info:  # subset, french or ushcn
+            if 'subset' in info:
+                subset = info.split('=')[-1].split('.csv')[0].split('subset_agg_')[-1]
+            elif 'dataset_2015_2021' in info:
+                subset = 'dataset_2015_2021.csv'
+            else:
+                subset = 'pivot_1990_1993_thr4_normalize.csv'
         elif 'model_type' in info:
             model_type = info.split('=')[-1].strip()
 
@@ -202,7 +214,10 @@ def parse_model(model, file):
             df[column] = np.nan
 
     dataset_name = file.split(file_start[model])[-1]
-    dataset_name = dataset_name.split('.pickle.txt' if 'pickle' in file else '.txt')[0]
+    if '.csv' in dataset_name:
+        dataset_name = dataset_name.split('.csv')[0]
+    else:
+        dataset_name = dataset_name.split('.pickle.txt' if 'pickle' in file else '.txt')[0]
 
     # subset = underscore.join(dataset_name.split(underscore)[:-1])
     # num_fut = dataset_name.split(underscore)[-1].split('nf')[-1]
@@ -560,33 +575,76 @@ def main():
         complete_dfs = {num_fut: pd.DataFrame(columns=columns) for num_fut in num_futs}
         for num_fut, complete_df in complete_dfs.items():
             complete_df.rename_axis(index='Dataset', inplace=True)
-            # example: french_subset_agg_th1_1_0.2_nf14_sttransformer
+            # example: french_subset_agg_th1_1_nan2_nf14_sttransformer
             for model, df in df_dict.items():
-                subset_df = df.loc[df.index.astype(str).str.contains(f'nf{num_fut}')]
 
-                parameters = subset_df.index.to_series().apply(lambda dataset_: dataset_.split('_'))
+                if args.debug_model and model in args.debug_model:
+                    print("DEBUG:", model, df)
+
+                subset_df = df.loc[df.index.astype(str).str.contains(f'nf{num_fut}')]
+                ushcn_results = subset_df[subset_df.index.astype(str).str.startswith('ushcn_pivot_1990')]
+                french_results = subset_df[subset_df.index.astype(str).str.startswith('french_dataset_2015_2021')]
+
+                if args.debug_model and model in args.debug_model:
+                    print("DEBUG: model:", model)
+                    print("DEBUG: ushcn_results:\n", ushcn_results)
+                    print("DEBUG: french_results:\n", french_results)
+
                 subset_idx = -1
                 nan_idx = -1
 
-                for dataset_params in parameters:
-                    original_dataset_name = '_'.join(dataset_params)
+                # big datasets
+                if not ushcn_results.empty or not french_results.empty:
+                    for row in subset_df.itertuples():
+                        index = row.Index
+                        dataset_name = 'ushcn_pivot_1990_1993_thr4_normalize_' \
+                            if index.startswith('ushcn') else 'french_dataset_2015_2021_'
 
-                    for param in dataset_params:
-                        if param.startswith('th'):
-                            subset_idx = dataset_params.index(param)
-                        if param.startswith('nan'):
-                            nan_idx = dataset_params.index(param)
+                        parameters = index.split(dataset_name)[-1].split('_')
 
-                    dataset = dataset_params[subset_idx - 1]
-                    subset = '_'.join(dataset_params[subset_idx:nan_idx])
-                    nan_num = float(dataset_params[nan_idx].split('nan')[-1]) / 10
+                        if args.debug_model and model in args.debug_model:
+                            print("DEBUG: parameters:", parameters)
 
-                    if not args.embedder_ablation:
-                        complete_df.loc[f"{dataset}_{subset}",
-                                        (nan_num, model)] = subset_df.loc[original_dataset_name, args.metric]
-                    else:
-                        complete_df.loc[f"{dataset}_{subset}", (nan_num, model)] = \
+                        dataset_name = dataset_name.rstrip('_')
+                        original_dataset_name = index
+
+                        if args.debug_model and model in args.debug_model:
+                            print("DEBUG: original_dataset_name:", original_dataset_name)
+
+                        for param in parameters:
+                            if 'nan' in param:
+                                nan_idx = parameters.index(param)
+                                break
+
+                        dataset_name = dataset_name.rstrip('_')
+                        nan_num = float(parameters[nan_idx].split('nan')[-1]) / 10
+
+                        complete_df.loc[dataset_name, (nan_num, model)] = \
                             subset_df.loc[original_dataset_name, args.metric]
+
+                # subsets
+                if ushcn_results.empty and french_results.empty:
+                    parameters = subset_df.index.to_series().apply(lambda dataset_: dataset_.split('_'))
+
+                    for dataset_params in parameters:
+                        original_dataset_name = '_'.join(dataset_params)
+
+                        for param in dataset_params:
+                            if param.startswith('th'):
+                                subset_idx = dataset_params.index(param)
+                            if param.startswith('nan'):
+                                nan_idx = dataset_params.index(param)
+
+                        dataset = dataset_params[subset_idx - 1]
+                        subset = '_'.join(dataset_params[subset_idx:nan_idx])
+                        nan_num = float(dataset_params[nan_idx].split('nan')[-1]) / 10
+
+                        if not args.embedder_ablation:
+                            complete_df.loc[f"{dataset}_{subset}",
+                            (nan_num, model)] = subset_df.loc[original_dataset_name, args.metric]
+                        else:
+                            complete_df.loc[f"{dataset}_{subset}", (nan_num, model)] = \
+                                subset_df.loc[original_dataset_name, args.metric]
 
             complete_df.sort_index(inplace=True)
             # complete_df.sort_index(axis=1, level=['model', 'nan_num'], ascending=[True, True], inplace=True)
@@ -736,8 +794,86 @@ def merge():
                         break
 
 
+def merge_ablation():
+    results_datasets = [file for file in os.listdir('.') if file.endswith('.csv') and file.startswith('complete')
+                        and 'losses' not in file]
+    ists_results_path = './ists/output/results'
+    metric = args.metric.lower()
+
+    for results_file in results_datasets:
+        print("Parsing results file:", results_file)
+        results_df = pd.read_csv(results_file, index_col=0, header=[0, 1])
+
+        results_df = results_df.drop(columns=[(nan_num, 'ISTS') for nan_num in ['0.0', '0.2', '0.5', '0.8']])
+
+        num_fut = None
+        filename_params = results_file.split('_')
+
+        for param in filename_params:
+            if param.startswith('nf'):
+                num_fut = param
+                break
+
+        datasets = results_df.index.to_list()
+
+        for dataset in datasets:
+            for nan_num in ['0.0', '0.2', '0.5', '0.8']:
+                nan_num_str = f'nan{int(float(nan_num) * 10)}'
+                filename = '_'.join([dataset, nan_num_str, num_fut]) + '.csv'
+                print("Merging with ists results: ", filename)
+                if os.path.exists(os.path.join(ists_results_path, filename)):
+                    ists_results = pd.read_csv(os.path.join(ists_results_path, filename), index_col=0, header=0)
+                else:
+                    print("File not found, skipping ", filename)
+                    continue
+
+                print(ists_results)
+                print(ists_results.index)
+
+                for ists_row in ists_results.itertuples():
+                    ists_row: collections.namedtuple
+                    print(f"results_df.loc['{dataset}', ('{nan_num}', '{ists_row.Index}')] = "
+                          f"ists_results.loc['{ists_row.Index}', '{metric}']")
+                    results_df.loc[dataset, (nan_num, ists_row.Index)] = ists_results.loc[ists_row.Index, metric]
+
+                    stt_columns = [(nan_num, ablation_model) for ablation_model in ablation_experiment_models]
+                    # from the docs: The sort algorithm uses only < comparisons between items.
+                    sorted_columns = [col for col in sorted(stt_columns,
+                                                            key=lambda x: ablation_experiment_models.index(x[1]))]
+
+                    print("stt_columns", stt_columns)
+                    print("sorted_columns", sorted_columns)
+                    # other_columns = results_df.columns[~results_df.columns.isin(stt_columns)]
+                    print("results_df.columns", results_df.columns)
+                    other_columns = [col for col in results_df.columns if col not in stt_columns]
+                    print("other_columns", other_columns)
+                    previous_columns = [col for col in other_columns if float(col[0]) < float(nan_num)]
+                    print("previous_columns", previous_columns)
+                    other_columns = [col for col in other_columns if col not in previous_columns]
+                    print("other_columns", other_columns)
+
+                    print("Column lists")
+                    print(previous_columns, sorted_columns, other_columns, sep='\n')
+                    all_columns = previous_columns + sorted_columns + other_columns
+
+                    print("Results_df\n", results_df)
+                    print("ists_results\n", ists_results)
+
+                    present_columns = [col for col in all_columns if col in results_df.columns]
+                    results_df = results_df.loc[:, present_columns]
+
+            print("results_df.columns:", results_df.columns)
+            """columns_to_drop = [(nan_num, 'ISTS') for nan_num in ['0.0', '0.2', '0.5', '0.8']
+                                                  if (nan_num, 'ISTS') in results_df.columns]
+            results_df = results_df.drop(columns=columns_to_drop)
+            print("results_df.columns:", results_df.columns)"""
+            results_df.to_csv(results_file)
+
+
 if __name__ == '__main__':
     if args.merge:
         merge()
+    elif args.merge_ablation:
+        merge_ablation()
     else:
         main()
