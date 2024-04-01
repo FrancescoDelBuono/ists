@@ -80,8 +80,8 @@ emb_abl_exp_mapping = {
 ablation_experiment_models = ['STT', 'STT w/o time enc', 'STT w/o null enc', 'STT w/o time null enc',
                               'T', 'S', 'E', 'TS', 'TE', 'SE', 'TS_FE', 'STT_SE', 'SE_SE', 'STT_MTS_E']
 
-# TODO: implement time parse
-# TODO: implement new ablation data (csv) merge
+# TODO: implement time parser
+# TODO: check that the scaler is managed correctly when logging results
 
 if args.encoder_ablation or args.embedder_ablation:
     df_dict = {model: pd.DataFrame() for model in models}
@@ -228,7 +228,7 @@ def parse_model(model, file):
         if not metrics:
             if not args.fill_old or dataset_name not in df.index:
                 df.loc[dataset_name] = [np.nan] * len(df.columns)
-            return  # file is not complete or empty
+            return  # the file is not complete or empty
 
         if 'ValueError' in metrics[-1]:  # if error save NaN
             if dataset_name not in df.index:
@@ -307,6 +307,7 @@ def parse_model(model, file):
 
                     else:
                         print(f"ValueError: Could not parse {file}: unknown structure.")
+                        print(metrics)
                         if debug:
                             print("DEBUG: metrics", metrics)
                         if not args.ignore_incomplete:
@@ -314,6 +315,7 @@ def parse_model(model, file):
 
                 except IndexError:
                     print(f'IndexError: Could not parse {file}: unknown structure.')
+                    print(metrics)
                     if dataset_name not in df.index:
                         df.loc[dataset_name] = [np.nan] * len(df.columns)
 
@@ -376,12 +378,14 @@ def parse_model(model, file):
 
                     else:
                         print(f"ValueError: Could not parse {file}: unknown structure.")
+                        print(metrics)
                         if debug:
                             print("DEBUG: metrics", metrics)
                         if not args.ignore_incomplete:
                             raise ValueError(f'Could not parse {file}: unknown structure.')
                 except IndexError:
                     print(f'IndexError: Could not parse {file}: unknown structure.')
+                    print(metrics)
                     if dataset_name not in df.index:
                         df.loc[dataset_name] = [np.nan] * len(df.columns)
 
@@ -528,6 +532,7 @@ def parse_model(model, file):
 
                     else:
                         print(f"ValueError: Could not parse {file}: unknown structure.")
+                        print(metrics)
                         if debug:
                             print("DEBUG: metrics", metrics)
                         if not args.ignore_incomplete:
@@ -535,6 +540,7 @@ def parse_model(model, file):
 
                 except IndexError:
                     print(f'IndexError: Could not parse {file}: unknown structure.')
+                    print(metrics)
                     df.loc[dataset_name] = [np.nan] * len(df.columns)
 
                 if debug:
