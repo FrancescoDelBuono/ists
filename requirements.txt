@@ -1,5 +1,5 @@
-numpy
-pandas
+numpy==1.26.1
+pandas==2.2.1
 tensorflow[and-cuda]
 tensorrt
 scikit-learn
@@ -12,3 +12,11 @@ pynvml
 
 # for CUDA 12 on ARIES
 # pip install torch==2.1.0+cu121 torchvision==0.16.0+cu121 --extra-index-url https://download.pytorch.org/whl/cu121
+
+# GPU version of pandas from RAPIDS, running on sparc20 and LYRA DGX
+# pip install --extra-index-url=https://pypi.nvidia.com cudf-cu11==24.2.* dask-cudf-cu11==24.2.* cuml-cu11==24.2.* \
+    # cugraph-cu11==24.2.* cuspatial-cu11==24.2.* cuproj-cu11==24.2.* \
+    # cuxfilter-cu11==24.2.* cucim-cu11==24.2.* pylibraft-cu11==24.2.* \
+    # raft-dask-cu11==24.2.*
+# or maybe only:
+# cudf-cu11==24.2.2
