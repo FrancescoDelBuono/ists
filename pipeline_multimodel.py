@@ -12,6 +12,7 @@ from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from multiprocessing import Manager, get_context
 
+# import cudf.pandas
 import pandas as pd
 
 from ablation import ablation, ablation_tests_mapping, single_test_ablation
@@ -79,6 +80,9 @@ parser.add_argument('--force_execution', action='store_true', default=False,
 
 parser.add_argument('--scaler', type=str, nargs='+', default=['standard'] * 3,
                     help='Scaler to use for the baseline models.')
+
+parser.add_argument('--short_run', action='store_true', default=False,
+                    help='Run the models for 100 batches and 1 epoch only.')
 
 args = parser.parse_args()
 
@@ -168,6 +172,16 @@ def change_params(path_params: dict, base_string: str, new_string: str) -> dict:
 
 
 def data_step(path_params: dict, prep_params: dict, eval_params: dict, keep_nan: bool = False) -> dict:
+    # TODO: try using cuNumeric to speed up the data_step.
+    #  CuPy could also be useful to accelerate without editing the code
+    #  @jit decorator, we can call data_step and dataset.py_func to see if they return the same dataset
+    #  use a jit decorator for each function called by data_step for the best performance
+    #  for even better performance @njit (jit with nopython=True) but it probably fails with pandas.
+    #  Also, it could be useful to analyze what's going on with data_step.inspect_types() and data_step.get_stats()
+    #  There should be a way to keep data in the GPU memory until the data_step is over: CUDA Device Arrays.
+    #  It's possible to use (from numba import cuda) cuda.to_device() and cuda.device_array() to keep data in the GPU
+    #  and avoid the final copy back to the host.
+    #  Should set the data types to np.float32 when possible as np.float64 is way slower on Tesla GPUs.
     ts_params = prep_params['ts_params']
     feat_params = prep_params['feat_params']
     spt_params = prep_params['spt_params']
@@ -918,13 +932,18 @@ def normal_run():
                         with open(dataset_file_path, 'wb') as f:
                             pickle.dump(train_test_dict, f)
 
+                        # free memory used by the dataset
+                        del train_test_dict
+
                         python_interpreter_path = os.path.join(os.path.expanduser('~'),
                                                                '.virtualenvs', 'ists', 'bin', 'python')
                         command = (f'{python_interpreter_path} launch_experiments.py '
                                    f'--model {" ".join(models)} '
                                    f'--dataset {os.path.abspath(dataset_file_path)} '
                                    f'--device {" ".join(args.device)} '
-                                   f'{"--force_execution" if args.force_execution else ""} ')
+                                   f'{"--force_execution" if args.force_execution else ""} '
+                                   f'{"--recycle_gpu" if args.recycle_gpu else ""} '
+                                   f'{"--short_run" if args.short_run else ""} ')
 
                         if args.scaler:
                             if len(args.scaler) > 1:
