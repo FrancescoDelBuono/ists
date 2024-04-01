@@ -2,6 +2,8 @@ import argparse
 import multiprocessing
 import os
 import socket
+import subprocess
+import time
 from concurrent import futures
 from time import sleep
 from pynvml import nvmlInit, nvmlDeviceGetMemoryInfo, nvmlDeviceGetHandleByIndex
@@ -25,6 +27,26 @@ parser.add_argument('--force_execution', action='store_true', default=False,
 
 parser.add_argument('--scaler', type=str, default=['standard'], nargs='+',
                     help="List of scalers to use for preprocessing the data, one for each model.")
+
+parser.add_argument('--short_run', action='store_true', default=False,
+                    help="Run a short version of the experiments for debugging purposes.")
+
+args = parser.parse_args()
+
+if args.scaler[0].lower() == 'none':
+    args.scaler = None
+
+if args.scaler:
+    if len(args.scaler) == len(args.model):
+        scaler_map = {model: scaler for model, scaler in zip(args.model, args.scaler)}
+    elif len(args.scaler) == 1:
+        scaler_map = {model: args.scaler[0] for model in args.model}
+    else:
+        raise ValueError(f"Invalid number of scalers specified: "
+                         f"{len(args.scaler)} scalers for {len(args.model)} models.")
+
+else:
+    scaler_map = {model: 'None' for model in args.model}
 
 hostname = socket.gethostname()
 
@@ -66,12 +88,24 @@ scripts = {
 }
 
 parameters = {
-    'GRU-D': 'fdb {} {} 2>&1 | tee grud_output_{}.txt',
+    'GRU-D': 'fdb {} --scaler {} {}',
     'CRU': '--dataset fdb --task forecast -lsd 30 --epochs 10 --sample-rate 0.5 --filename {} --batch-size 64 '
-           '--device {} {} 2>&1 | tee cru_output_{}.txt',
+           '--device {} --scaler {} {}',
     'mTAN': '--alpha 100 --niters 10 --lr 0.0001 --batch-size 64 --rec-hidden 256 --gen-hidden 50 --latent-dim 20 '
             '--enc mtan_rnn --dec mtan_rnn --save 1 --norm --kl --learn-emb --k-iwae 1 --dataset fdb '
-            '--filename {} --device {} --normalize_tp {} 2>&1 | tee mtan_output_{}.txt'
+            '--filename {} --device {} --scaler {} --normalize_tp {}'
+}
+
+output_files = {
+    'GRU-D': 'grud_output_{}_{}.txt',
+    'CRU': 'cru_output_{}_{}.txt',
+    'mTAN': 'mtan_output_{}_{}.txt'
+}
+
+short_run_parameters = {
+    'GRU-D': '--epochs 1 --batches 100',
+    'CRU': '--epochs 1 --batches 100',
+    'mTAN': '--niters 1 --batches 100'
 }
 
 vram_usage = {
@@ -79,23 +113,6 @@ vram_usage = {
     'CRU': 3221225472,  # 3 GB in Bytes (CRU uses 3 GB of VRAM)
     'mTAN': 40802189312  # 38 GB in Bytes (mTAN uses 38 GB of VRAM)
 }
-
-args = parser.parse_args()
-
-if args.scaler[0].lower() == 'none':
-    args.scaler = None
-
-if args.scaler:
-    if len(args.scaler) == len(args.model):
-        scaler_map = {model: scaler for model, scaler in zip(args.model, args.scaler)}
-    elif len(args.scaler) == 1:
-        scaler_map = {model: args.scaler[0] for model in args.model}
-    else:
-        raise ValueError(f"Invalid number of scalers specified: "
-                         f"{len(args.scaler)} scalers for {len(args.model)} models.")
-
-else:
-    scaler_map = {model: 'None' for model in args.model}
 
 
 def launch_model(model: str, dataset: str, device_list: dict[str: multiprocessing.RLock],
@@ -105,11 +122,9 @@ def launch_model(model: str, dataset: str, device_list: dict[str: multiprocessin
 
     print(f"Process {os.getpid()} started with parameters: {model}, {dataset}")
 
-    if '/' in dataset:
-        dataset_name = dataset.split('/')[-1]
+    if os.sep in dataset:
+        dataset_name = dataset.split(os.sep)[-1]
 
-    elif '\\' in dataset:
-        dataset_name = dataset.split('\\')[-1]
     else:
         dataset_name = dataset
 
@@ -149,27 +164,80 @@ def launch_model(model: str, dataset: str, device_list: dict[str: multiprocessin
 
     if model == 'GRU-D':
         cmd_parameters = parameters[model].format(dataset,
-                                                  f'--scaler {scaler_map[model]}',
-                                                  dataset_name)
+                                                  scaler_map[model],
+                                                  short_run_parameters[model] if args.short_run else '')
     elif model == 'CRU':
         cmd_parameters = parameters[model].format(dataset,
                                                   device,
-                                                  f'--scaler {scaler_map[model]}',
-                                                  dataset_name)
+                                                  scaler_map[model],
+                                                  short_run_parameters[model] if args.short_run else '')
     elif model == 'mTAN':
         cmd_parameters = parameters[model].format(dataset,
                                                   device,
-                                                  f'--scaler {scaler_map[model]}',
-                                                  dataset_name)
+                                                  scaler_map[model],
+                                                  short_run_parameters[model] if args.short_run else '')
     else:
         raise RuntimeError(f'Unknown model {model}')
 
     # command = interpreter + ' ' + wdir + '/' + script + ' ' + parameter
     command = ' '.join([interpreter, script, cmd_parameters])
+    output_file = output_files[model].format(scaler_map[model], dataset_name)
+
+    one_day_timeout = 60 * 60 * 24  # 24 hours in seconds
 
     try:
         print(f'{os.getpid()}: Launching {model} using {dataset_name} on {device}')
-        os.system(command)
+        # os.system(command)
+        start_time = time.time()
+        proc = subprocess.Popen(command.split(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+        with open(os.path.join(wdir, output_file), 'w') as out_file:
+            while True:
+                result = proc.poll()
+                if result is not None:
+                    subprocess_exit_code = result
+                    break
+                else:
+                    output = proc.stdout.readline()
+                    line_counter = 0
+                    while output:
+                        out_file.write(output)
+                        print(output, end='', flush=True)
+
+                        # this mechanism is to avoid that processes like GRU-D keep this process busy reading
+                        # without ever checking the timeout threshold.
+                        line_counter += 1
+                        if line_counter > 1000:
+                            break
+
+                        output = proc.stdout.readline()
+
+                if time.time() - start_time > one_day_timeout:
+                    print(f"{os.getpid()}: Timeout reached, sending SIGINT to process {proc.pid} "
+                          f"(model {model} using {dataset_name} on {device}).")
+
+                    proc.terminate()  # Try polite termination first
+
+                    try:
+                        print(f"Waiting one minute for process {proc.pid} to gracefully exit...")
+                        proc.wait(timeout=60)  # Wait for process to gracefully exit
+                        subprocess_exit_code = proc.returncode
+
+                    except subprocess.TimeoutExpired:
+                        print(f"Process {proc.pid} did not exit gracefully, sending SIGTERM.")
+                        proc.kill()  # Forceful termination if unresponsive
+                        subprocess_exit_code = -9
+
+                    break
+
+                sleep(2)  # sleep a bit to avoid busy waiting
+
+            output = proc.stdout.read()
+            # write to log all the output that was still in the buffer
+            if output:
+                out_file.write(output)
+                print(output, end='', flush=True)
+
         print(f'{os.getpid()}: Finished {model} using {dataset_name} on {device}')
 
     except Exception as e:
@@ -180,68 +248,161 @@ def launch_model(model: str, dataset: str, device_list: dict[str: multiprocessin
         if acquired_lock:
             acquired_lock.release()
 
+    return subprocess_exit_code
 
-def check_launch_model(model, dataset):
-    file_start_map = {
-        'GRU-D': 'grud_output_',
-        'CRU': 'cru_output_',
-        'mTAN': 'mtan_output_'
-    }
 
-    launch = True
-    completed = False
-    log_files = [file for file in os.listdir(wdirs[model]) if file.endswith('.pickle.txt')]
+def check_launch_model(model: str, dataset: str) -> tuple[bool, bool]:
+    """
+    Scans the available logs in the model directory to check if the model has already been executed on the dataset.
+    If the model has already been executed on that dataset, the function checks if the execution was successful
+    or if the model crashed. If the model crashed, the function returns True, else False.
+    If the model has already been executed and the run was successful, the function returns False.
+    The second return argument is True if the model has already been executed and the run was successful, else False.
+    This argument has the sole purpose of computing statistics.
+    """
 
-    ran = False
-    for file in log_files:
-        if dataset.split('/')[-1] in file:
-            ran = True
-            break
+    def check_correctness(log_file) -> tuple[bool, bool]:
+        with (open(os.path.join(wdirs[model], log_file)) as dataset_log_file):
 
-    if ran:
-        for file in log_files:
-            if file.startswith(file_start_map[model]):
-                if dataset.split('/')[-1] in file:
-                    with open(os.path.join(wdirs[model], file)) as dataset_file:
-                        if model == 'CRU':
-                            last_lines = dataset_file.readlines()[-4:]
+            # TODO: manage timeout: tail -n 1 *.pickle.txt | grep -v "Duration: *"
 
-                            if len(last_lines) < 4:
+            last_lines = dataset_log_file.readlines()[-5:]
+
+            if len(last_lines) < 4:
+                errors_in_log = any(['Timeout' in line or
+                                     'ValueError' in line or
+                                     'FileNotFound' in line
+                                     for line in last_lines])
+
+                completed = False
+
+                if not errors_in_log:  # search for a process that is still running with this dataset
+                    cmd = f"ps aux | grep {interpreters[model]}.*{dataset.split('/')[-1]}"
+                    print(f"Log file {log_file} is too short, searching for a process with the same dataset using:")
+                    print(cmd)
+                    process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True)
+
+                    if process.stderr:
+                        print(f"Error while running command {cmd}: {process.stderr}")
+                        launch = True
+
+                    else:
+                        found = False
+                        for line in process.stdout:
+                            if interpreters[model] in line and dataset.split('/')[-1] in line:
+                                print(f"Found a process still running with the same dataset: {line}")
+                                launch = False
+                                found = True
                                 break
 
-                            # check if model crashed, if so, skip execution
-                            crashed = "ValueError: NaN in gradient" in last_lines[-1]
-                            # be completely sure that the results are structured as they should to say that the run was
-                            # successful
-                            completed = last_lines[0].startswith('Train R2:') and \
-                                last_lines[1].startswith('Train MSE:') and \
-                                last_lines[2].startswith('Train MAE:') and last_lines[3].startswith('Duration:')
+                        if not found:
+                            print("No process found, re-executing.")
+                            launch = True
 
-                            print(f"Log file {file}, last lines:")
-                            print(last_lines)
+                else:
+                    print(f"Found errors in log file {log_file}. Last lines:")
+                    print(last_lines)
+                    launch = True
 
-                            if completed:
-                                print("Skipping execution.")
-                                launch = False
+                return launch, completed
 
-                            else:
-                                print("Model crashed, re-executing.")
-                                launch = True
+            if model == 'CRU':
+                print("Checking CRU log file.")
+                '''
+                Train R2: 0.8168, Test R2: 0.7675
+                Train MSE: 0.0038, Test MSE: 0.0054
+                Train MAE: 0.0482, Test MAE: 0.0576
+                Duration: 2 days, 17:52:54.155161
+                '''
 
-                            break
+                # check if the model crashed, if so, skip execution
+                # need to be completely sure that the results are structured as they should to say
+                # that the run was successful
+                completed = last_lines[-4].startswith('Train R2:') and \
+                            last_lines[-3].startswith('Train MSE:') and \
+                            last_lines[-2].startswith('Train MAE:') and \
+                            last_lines[-1].startswith('Duration:')
 
-                        elif model == 'GRU-D':
-                            # TODO: implement
-                            pass
+                print(f"Log file {log_file}, last lines:")
+                print(last_lines)
 
-                        elif model == 'mTAN':
-                            # TODO: implement
-                            pass
+                if completed:
+                    print("Skipping execution.")
+                    launch = False
 
-    if launch:
+                else:
+                    print("Model crashed, re-executing.")
+                    launch = True
+
+            elif model == 'GRU-D':
+                print("Checking GRU-D log file.")
+                '''
+                Performance metrics: 
+                R2 score:  [-0.20752941465679964, -0.10023247384247913, -0.3530475548581993]
+                MAE score:  [0.12207800459720515, 0.11395531709604426, 0.1395537585637083]
+                MSE score:  [0.025358614210495553, 0.022113583850112563, 0.03154178228352191]
+                ====================
+                '''
+                completed = last_lines[-5].startswith('Performance metrics:') and \
+                            last_lines[-4].startswith('R2 score:') and \
+                            last_lines[-3].startswith('MAE score:') and \
+                            last_lines[-2].startswith('MSE score:')
+                # last_lines[-1] is the ===== line
+
+                print(f"Log file {log_file}, last lines:")
+                print(last_lines)
+
+                if completed:
+                    print("Skipping execution.")
+                    launch = False
+                else:
+                    print("Model crashed, re-executing.")
+                    launch = True
+
+            elif model == 'mTAN':
+                print("Checking mTAN log file.")
+                '''
+                (Iter: 10, recon_loss: 27.0015, mse_loss: 0.0068, acc: 0.0010, train_mse: 0.0001, train_mae: 
+                0.0010, train_r2: 0.0104, val_loss: 0.0065, val_acc: 0.0623, val_mse: 0.0065, val_mae: 
+                0.0623, val_r2: 0.6894, test_acc: 0.0968, test_mse: 0.0150, test_mae: 0.0968, 
+                test_r2: 0.3574) (same line)
+                Best val loss: 0.006492583523961666
+                Total time: 1228.6564812660217
+                '''
+                completed = last_lines[-3].startswith('Iter: 10') and \
+                            'test_mse' in last_lines[-3] and \
+                            'test_mae' in last_lines[-3] and \
+                            'test_r2' in last_lines[-3] and \
+                            last_lines[-2].startswith('Best val loss:') and \
+                            last_lines[-1].startswith('Total time:')
+
+                print(f"Log file {log_file}, last lines:")
+                print(last_lines)
+
+                if completed:
+                    print("Skipping execution.")
+                    launch = False
+                else:
+                    print("Model crashed, re-executing.")
+                    launch = True
+
+            return launch, completed
+
+    log_filename = output_files[model].format(scaler_map[model], dataset.split('/')[-1])
+
+    to_launch = True
+    has_completed = False
+    # log file name example: cru_output_minmax_french_th18_0_nan0_nf7.pickle.txt
+
+    if log_filename in os.listdir(wdirs[model]):
+        # the model was run before
+        to_launch, has_completed = check_correctness(log_filename)
+
+    # if the model wasn't run before, the launch and completed flags are not changed
+    if to_launch:
         print(f"Execution check True for {model} on {dataset}.")
 
-    return launch, True if completed else False
+    return to_launch, has_completed
 
 
 def main():
@@ -292,6 +453,8 @@ def main():
                 if len(models) > 1:
                     raise RuntimeError('Cannot recycle GPUs when training different models at once.')
 
+                print("Recycling GPUs.")
+
                 # total_gpu_mem = torch.cuda.get_device_properties(0).total_memory
                 device_idx = int(args.device[0].split(':')[-1])
                 nvmlInit()
@@ -299,6 +462,8 @@ def main():
                 free_gpu_mem = info.free
                 # runnable_models = total_gpu_mem // vram_usage[models[0]]
                 runnable_models = free_gpu_mem // vram_usage[models[0]]
+
+                print("Runnable models:", runnable_models)
 
                 devices = manager.dict()
 
@@ -314,10 +479,9 @@ def main():
                 max_workers = len(devices) * runnable_models if models != ['GRU-D'] \
                     else multiprocessing.cpu_count() // 4
 
-            else:
+            else:  # devices != ['all'] and not recycle_gpu
                 devices = manager.dict({cuda_dev: manager.RLock() for cuda_dev in args.device})
 
-            if not args.recycle_gpu:
                 if models != ['GRU-D']:
                     max_workers = len(devices)
                 else:
@@ -345,6 +509,14 @@ def main():
 
         # TODO: it appears that the number of processes able to run is somehow limited by the Manager. Having
         #  max_workers > len(devices) still causes the program to run with at most len(devices) processes.
+
+        # TODO: maybe use an init function (argument to ProcessPoolExecutor) to start the
+        #  process only if the RAM is sufficient (else sleep for like 5 minutes).
+        #  This requires a way to estimate the memory footprint of models and their datasets in advance.
+        #  (CRU is problematic regarding memory footprint)
+
+        # The usage of max_tasks_per_child implies mp_context = 'spawn'. The parameter is available only from
+        # Python 3.11
         with futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
             for dataset in datasets:
                 for model in models:
@@ -374,23 +546,27 @@ def main():
                 else:
                     print("Forcing execution on all datasets.")
 
-            print("Starting experiments.", flush=True)
-            done, not_done = futures.wait(futures_, return_when=futures.ALL_COMPLETED)
+                print("Starting experiments.", flush=True)
 
-            futures_exceptions = [future.exception() for future in done]
-            failed_futures = sum(map(lambda exception_: True if exception_ is not None else False,
-                                     futures_exceptions))
+                done, not_done = futures.wait(futures_, return_when=futures.ALL_COMPLETED)
 
-            if failed_futures > 0:
-                print("Could not train and evaluate all models. Thrown exceptions: ")
+        futures_exceptions = [future.exception() for future in done]
+        failed_futures = sum(map(lambda exception_: True if exception_ is not None else False,
+                                 futures_exceptions))
 
-                for exception in futures_exceptions:
-                    print(exception)
+        if not_done:
+            print(f"{len(not_done)} processes timed out.")
 
-                raise RuntimeError(f"Couldn't train and evaluate all models, {failed_futures} processes failed.")
+        if failed_futures > 0:
+            print("Could not train and evaluate all models. Thrown exceptions: ")
 
-            if failed_futures == 0:
-                print("Experiments concluded successfully.")
+            for future_, exception in futures_exceptions:
+                print(exception)
+
+            raise RuntimeError(f"Couldn't train and evaluate all models, {failed_futures} processes failed.")
+
+        if failed_futures == 0:
+            print("Experiments concluded successfully.")
 
 
 if __name__ == '__main__':
