@@ -514,6 +514,7 @@ def main():
         #  process only if the RAM is sufficient (else sleep for like 5 minutes).
         #  This requires a way to estimate the memory footprint of models and their datasets in advance.
         #  (CRU is problematic regarding memory footprint)
+        #  RAPIDS RMM library can be used to manage memory allocation and deallocation in CUDA, could be useful.
 
         # The usage of max_tasks_per_child implies mp_context = 'spawn'. The parameter is available only from
         # Python 3.11
