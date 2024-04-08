@@ -397,6 +397,8 @@ def check_launch_model(model: str, dataset: str) -> tuple[bool, bool]:
     if log_filename in os.listdir(wdirs[model]):
         # the model was run before
         to_launch, has_completed = check_correctness(log_filename)
+    else:
+        print(f"Log file {log_filename} not found in {wdirs[model]}.")
 
     # if the model wasn't run before, the launch and completed flags are not changed
     if to_launch:

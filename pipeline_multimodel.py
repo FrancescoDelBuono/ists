@@ -155,7 +155,7 @@ def parse_params(config_file: str = None):
     if config_file is None:
         config_file = args.file
 
-    assert os.path.exists(config_file), 'Configuration file does not exist'
+    assert os.path.exists(config_file), f'Configuration file does not exist: {config_file}'
 
     with open(config_file, 'r') as f:
         conf = json.load(f)
@@ -940,18 +940,18 @@ def normal_run():
                         command = (f'{python_interpreter_path} launch_experiments.py '
                                    f'--model {" ".join(models)} '
                                    f'--dataset {os.path.abspath(dataset_file_path)} '
-                                   f'--device {" ".join(args.device)} '
-                                   f'{"--force_execution" if args.force_execution else ""} '
-                                   f'{"--recycle_gpu" if args.recycle_gpu else ""} '
-                                   f'{"--short_run" if args.short_run else ""} ')
+                                   f'--device {" ".join(args.device)}'
+                                   f'{" --force_execution" if args.force_execution else ""}'
+                                   f'{" --recycle_gpu" if args.recycle_gpu else ""}'
+                                   f'{" --short_run" if args.short_run else ""}')
 
                         if args.scaler:
                             if len(args.scaler) > 1:
-                                command += f'--scaler {" ".join(args.scaler)}'
+                                command += f' --scaler {" ".join(args.scaler)}'
                             else:
-                                command += f'--scaler {args.scaler[0]}'
+                                command += f' --scaler {args.scaler[0]}'
                         else:
-                            command += '--scaler None'
+                            command += ' --scaler None'
 
                         print(command)
                         try:
